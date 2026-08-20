@@ -1,5 +1,8 @@
 # DEVenv
 
+[![ShellCheck](https://github.com/Pat9496/linux-development-environment/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/Pat9496/linux-development-environment/actions/workflows/shellcheck.yml)
+[![Shell: Bash](https://img.shields.io/badge/shell-bash-blue)](https://www.gnu.org/software/bash/)
+
 [English version](README.md)
 
 ## Inhaltsverzeichnis
@@ -16,6 +19,7 @@
   - [Das bestehende Home verwenden](#das-bestehende-home-verwenden)
   - [Ein separates DEVenv-Home erstellen](#ein-separates-devenv-home-erstellen)
 - [Mitwirkung](#mitwirkung)
+- [Danksagung](#danksagung)
 
 ## Über
 
@@ -49,7 +53,7 @@ Das Skript überprüft, ob `distrobox` und `podman`/`docker` auf dem Host vorhan
 
 Während der Installation werden die folgenden Informationen abgefragt:
 
-1. **Home-Verzeichnis-Modus** — Wahl zwischen der Verwendung des bestehenden Benutzer-Home oder der Erstellung eines separaten DEVenv-Home (siehe [Optionen für das Home-Verzeichnis](#optionen-für-das-home-verzeichnis) weiter unten).
+1. **Home-Verzeichnis-Modus** — Wahl zwischen der Verwendung des bestehenden Benutzer-Home oder der Erstellung eines separaten DEVenv-Home (Details in [Optionen für das Home-Verzeichnis](#optionen-für-das-home-verzeichnis) weiter unten).
 2. Wird ein separates Home gewählt, kann optional die vorhandene Claude Code-, Codex- und Copilot CLI-Konfiguration vom Host in das neue Container-Home kopiert werden.
 
 **Container-Neuanlage:** Das Skript zerstört und erstellt den Container bei jedem Lauf neu. Dies ist beabsichtigt — es verhindert, dass eine halb angewandte vorherige Installation oder abweichende Pakete stillschweigend mitgenommen werden. Existiert bereits ein Container mit dem Namen `DEVenv`, warnt das Skript und entfernt ihn vor der Erstellung eines neuen.
@@ -62,7 +66,7 @@ Nach Abschluss der Installation wird der Container mit folgendem Befehl betreten
 distrobox enter DEVenv
 ```
 
-Alternativ können die AI-CLI-Tools direkt vom Host aus unter Verwendung der in `~/.local/bin` installierten Wrapper-Befehle ausgeführt werden – siehe [Host-Wrapper-Befehle](#host-wrapper-befehle) weiter unten.
+Alternativ können die AI-CLI-Tools direkt vom Host aus unter Verwendung der in `~/.local/bin` installierten Wrapper-Befehle ausgeführt werden – Details in [Host-Wrapper-Befehle](#host-wrapper-befehle) weiter unten.
 
 ## Was wird installiert
 
@@ -122,3 +126,13 @@ Dies ermöglicht es, das bestehende AI-Assistenten-Setup innerhalb des Container
 ## Mitwirkung
 
 Beiträge sind willkommen. Ein Issue sollte erstellt werden, um Ideen vor der Einreichung von Code-Änderungen zu diskutieren.
+
+## Danksagung
+
+Das DEVenv-Installationsskript baut auf etablierten, quelloffenen Werkzeugen und Plattformen auf. Danke an die Maintainer und Beitragende der folgenden Projekte:
+
+- **Distrobox** – für die containerisierte Entwicklungsumgebung
+- **Fedora Toolbox** – für das stabile Basis-Container-Image
+- **Claude Code** (Anthropic) – für die integrierte KI-Entwicklungsassistenz
+- **Codex** (OpenAI) – für zusätzliche Code-Intelligenz
+- **Copilot CLI** (GitHub) – für die GitHub-integrierte KI-Unterstützung

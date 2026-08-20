@@ -1,5 +1,8 @@
 # DEVenv
 
+[![ShellCheck](https://github.com/Pat9496/linux-development-environment/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/Pat9496/linux-development-environment/actions/workflows/shellcheck.yml)
+[![Shell: Bash](https://img.shields.io/badge/shell-bash-blue)](https://www.gnu.org/software/bash/)
+
 [Deutsche Version](README.de.md)
 
 ## Table of Contents
@@ -16,6 +19,7 @@
   - [Using Your Existing Home](#using-your-existing-home)
   - [Creating a Separate DEVenv Home](#creating-a-separate-devenv-home)
 - [Contributing](#contributing)
+- [Credits](#credits)
 
 ## About
 
@@ -122,4 +126,14 @@ This allows you to use your existing AI assistant setup inside the container wit
 ## Contributing
 
 Contributions are welcome. Please open an issue to discuss your ideas before submitting code changes.
+
+## Credits
+
+DEVenv builds on and depends on the following upstream projects:
+
+- **Distrobox** — Container entry point and lifecycle management
+- **Fedora Toolbox** — Base container image (`registry.fedoraproject.org/fedora-toolbox:latest`)
+- **Claude Code** — AI assistant by Anthropic
+- **Codex** — AI assistant by OpenAI
+- **Copilot CLI** — AI assistant by GitHub
 

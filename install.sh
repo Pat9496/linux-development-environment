@@ -177,6 +177,8 @@ check_host_bin_on_path() {
     *":${HOST_BIN_DIR}:"*) ;;
     *)
       printf '\nNote: %s is not on your PATH.\n' "${HOST_BIN_DIR}" >&2
+      # $PATH here is literal text for the user's ~/.bashrc, not meant to expand in this script.
+      # shellcheck disable=SC2016
       printf 'Add it to your shell startup file (e.g. export PATH="%s:$PATH" in ~/.bashrc) so the claude, codex, and copilot wrappers are found.\n' "${HOST_BIN_DIR}" >&2
       ;;
   esac
