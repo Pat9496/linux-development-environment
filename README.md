@@ -14,6 +14,7 @@
   - [Running the Installation Script](#running-the-installation-script)
   - [Installation Prompts](#installation-prompts)
   - [Entering the Container](#entering-the-container)
+- [Host Cleanup](#host-cleanup)
 - [What Gets Installed](#what-gets-installed)
 - [Host Wrapper Commands](#host-wrapper-commands)
 - [Home Directory Options](#home-directory-options)
@@ -68,6 +69,20 @@ distrobox enter DEVenv
 ```
 
 Alternatively, you can run the AI CLI tools directly from the host using wrapper commands installed in `~/.local/bin`—see [Host Wrapper Commands](#host-wrapper-commands) below.
+
+## Host Cleanup
+
+Before creating the container, the installation script checks the host itself for existing installs of `claude`, `codex`, or `copilot` and removes them, so these tools run only inside the `DEVenv` container going forward. This step runs automatically, with no prompt, and prints a summary of what it found and removed (or a note that nothing was found).
+
+It detects and removes, per tool where applicable:
+
+- npm-global installs (`npm uninstall -g`)
+- Native distribution packages (apt, dnf, zypper, pacman, apk)
+- Homebrew casks/formulae (`claude-code`, `claude-code@latest`, `codex`, `copilot-cli`, `copilot-cli@prerelease`)
+- The official native installer for Claude Code and Codex (`~/.local/bin/claude` / `~/.local/share/claude`, and `~/.local/bin/codex` / `~/.codex/packages/standalone`)
+- The deprecated `gh extension` install of Copilot (`github/gh-copilot`)
+
+Your AI assistant configuration and agents—`~/.claude`, `~/.claude.json`, `~/.codex`, `~/.copilot`, `~/.config/github-copilot`—are never touched by this step; only the installed programs themselves are removed.
 
 ## What Gets Installed
 

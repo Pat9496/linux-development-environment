@@ -28,6 +28,19 @@ readonly AI_CONFIG_PATHS=(
   ".config/github-copilot"
 )
 
+readonly CLAUDE_CODE_NPM_PACKAGE="@anthropic-ai/claude-code"
+readonly CODEX_NPM_PACKAGE="@openai/codex"
+readonly COPILOT_CLI_NPM_PACKAGE="@github/copilot"
+readonly AI_CLI_NPM_PACKAGES=(
+  "${CLAUDE_CODE_NPM_PACKAGE}"
+  "${CODEX_NPM_PACKAGE}"
+  "${COPILOT_CLI_NPM_PACKAGE}"
+)
+
+readonly CLAUDE_NATIVE_STATE_DIR="${HOME}/.local/share/claude"
+readonly CODEX_NATIVE_STATE_DIR="${HOME}/.codex/packages/standalone"
+readonly GH_COPILOT_EXTENSION="github/gh-copilot"
+
 die() {
   printf 'Error: %s\n' "$1" >&2
   exit 1
@@ -43,6 +56,266 @@ check_host_prerequisites() {
     die "neither podman nor docker found on host. Distrobox needs one of them."
   fi
   [[ -f "${BOOTSTRAP_SCRIPT}" ]] || die "bootstrap script not found at ${BOOTSTRAP_SCRIPT}"
+}
+
+detect_host_pkg_manager() {
+  if command -v apt-get >/dev/null 2>&1; then
+    printf '%s\n' apt
+  elif command -v dnf >/dev/null 2>&1; then
+    printf '%s\n' dnf
+  elif command -v zypper >/dev/null 2>&1; then
+    printf '%s\n' zypper
+  elif command -v pacman >/dev/null 2>&1; then
+    printf '%s\n' pacman
+  elif command -v apk >/dev/null 2>&1; then
+    printf '%s\n' apk
+  else
+    return 1
+  fi
+}
+
+host_pkg_query() {
+  local mgr="$1" pkg="$2"
+  case "${mgr}" in
+    apt) dpkg -s "${pkg}" >/dev/null 2>&1 ;;
+    dnf|zypper) rpm -q "${pkg}" >/dev/null 2>&1 ;;
+    pacman) pacman -Q "${pkg}" >/dev/null 2>&1 ;;
+    apk) apk info -e "${pkg}" >/dev/null 2>&1 ;;
+    *) return 1 ;;
+  esac
+}
+
+host_pkg_remove() {
+  local mgr="$1" pkg="$2"
+  case "${mgr}" in
+    apt) sudo apt-get remove -y "${pkg}" ;;
+    dnf) sudo dnf remove -y "${pkg}" ;;
+    zypper) sudo zypper --non-interactive remove "${pkg}" ;;
+    pacman) sudo pacman -R --noconfirm "${pkg}" ;;
+    apk) sudo apk del "${pkg}" ;;
+  esac
+}
+
+native_package_candidates_for() {
+  local cmd="$1"
+  case "${cmd}" in
+    claude) printf '%s\n' "claude-code" ;;
+    codex) printf '%s\n' "codex" ;;
+    copilot) printf '%s\n' "copilot" "gh-copilot" "github-copilot-cli" ;;
+  esac
+}
+
+npm_global_pkg_installed() {
+  local pkg="$1" root
+  root="$(npm root -g 2>/dev/null)" || return 1
+  [[ -n "${root}" && -d "${root}/${pkg}" ]]
+}
+
+npm_global_pkg_uninstall() {
+  local pkg="$1"
+  if npm uninstall -g "${pkg}"; then
+    return 0
+  fi
+  if ! command -v sudo >/dev/null 2>&1; then
+    return 1
+  fi
+  sudo npm uninstall -g "${pkg}"
+}
+
+brew_cask_candidates_for() {
+  local cmd="$1"
+  case "${cmd}" in
+    claude) printf '%s\n' "claude-code" "claude-code@latest" ;;
+    codex) printf '%s\n' "codex" ;;
+  esac
+}
+
+brew_formula_candidates_for() {
+  local cmd="$1"
+  case "${cmd}" in
+    copilot) printf '%s\n' "copilot-cli" "copilot-cli@prerelease" ;;
+  esac
+}
+
+brew_cask_installed() {
+  local name="$1"
+  brew list --cask --versions "${name}" >/dev/null 2>&1
+}
+
+brew_formula_installed() {
+  local name="$1"
+  brew list --versions "${name}" >/dev/null 2>&1
+}
+
+# install_host_wrappers (below) writes its own wrapper scripts to these same
+# host-bin paths. On a later run of this script, a marker directory existing
+# does not by itself prove the file at the host-bin path is still the vendor's
+# native binary/symlink: it could already be install.sh's own wrapper from a
+# prior run. Every wrapper this script generates execs "distrobox enter", a
+# string that never appears in a vendor-shipped binary or install symlink
+# target, so grep for it before ever deleting one of these two paths.
+wrapper_owns_host_bin() {
+  local path="$1"
+  grep -q -- 'distrobox enter' "${path}" 2>/dev/null
+}
+
+claude_native_install_present() {
+  [[ -d "${CLAUDE_NATIVE_STATE_DIR}" ]]
+}
+
+remove_claude_native_install() {
+  local bin_path="${HOST_BIN_DIR}/claude" ok=0
+  if wrapper_owns_host_bin "${bin_path}"; then
+    printf 'Warning: %s looks like install.sh'"'"'s own wrapper, not the Claude Code native installer'"'"'s symlink; leaving it in place.\n' "${bin_path}" >&2
+  elif ! rm -f -- "${bin_path}"; then
+    ok=1
+  fi
+  rm -rf -- "${CLAUDE_NATIVE_STATE_DIR}" || ok=1
+  return "${ok}"
+}
+
+codex_native_install_present() {
+  [[ -d "${CODEX_NATIVE_STATE_DIR}" ]]
+}
+
+remove_codex_native_install() {
+  local bin_path="${HOST_BIN_DIR}/codex" ok=0
+  if wrapper_owns_host_bin "${bin_path}"; then
+    printf 'Warning: %s looks like install.sh'"'"'s own wrapper, not the Codex native installer'"'"'s binary; leaving it in place.\n' "${bin_path}" >&2
+  elif ! rm -f -- "${bin_path}"; then
+    ok=1
+  fi
+  rm -rf -- "${CODEX_NATIVE_STATE_DIR}" || ok=1
+  return "${ok}"
+}
+
+gh_copilot_extension_installed() {
+  local output
+  output="$(gh extension list 2>/dev/null)" || return 2
+  grep -Fq -- "${GH_COPILOT_EXTENSION}" <<< "${output}"
+}
+
+cleanup_host_ai_clis() {
+  local -a removed=() failed=()
+  local i cmd npm_pkg mgr candidate removed_str failed_str gh_status
+
+  if command -v npm >/dev/null 2>&1; then
+    for i in "${!AI_CLI_WRAPPER_COMMANDS[@]}"; do
+      cmd="${AI_CLI_WRAPPER_COMMANDS[$i]}"
+      npm_pkg="${AI_CLI_NPM_PACKAGES[$i]}"
+      if npm_global_pkg_installed "${npm_pkg}"; then
+        printf 'Found host npm-global install of %s (%s); uninstalling...\n' "${cmd}" "${npm_pkg}"
+        if npm_global_pkg_uninstall "${npm_pkg}"; then
+          removed+=("${npm_pkg} (npm)")
+        else
+          failed+=("${npm_pkg} (npm)")
+          printf 'Warning: failed to uninstall %s via npm; leaving it in place.\n' "${npm_pkg}" >&2
+        fi
+      fi
+    done
+  else
+    printf 'npm not found on host; skipping host npm-global check for claude, codex, copilot.\n' >&2
+  fi
+
+  if mgr="$(detect_host_pkg_manager)"; then
+    for cmd in "${AI_CLI_WRAPPER_COMMANDS[@]}"; do
+      while IFS= read -r candidate; do
+        [[ -z "${candidate}" ]] && continue
+        if host_pkg_query "${mgr}" "${candidate}"; then
+          printf 'Found host %s package "%s" for %s; removing...\n' "${mgr}" "${candidate}" "${cmd}"
+          if host_pkg_remove "${mgr}" "${candidate}"; then
+            removed+=("${candidate} (${mgr})")
+          else
+            failed+=("${candidate} (${mgr})")
+            printf 'Warning: failed to remove %s via %s; leaving it in place.\n' "${candidate}" "${mgr}" >&2
+          fi
+        fi
+      done < <(native_package_candidates_for "${cmd}")
+    done
+  else
+    printf 'No supported host package manager found (looked for apt-get, dnf, zypper, pacman, apk); skipping native-package check.\n' >&2
+  fi
+
+  if command -v brew >/dev/null 2>&1; then
+    for cmd in "${AI_CLI_WRAPPER_COMMANDS[@]}"; do
+      while IFS= read -r candidate; do
+        [[ -z "${candidate}" ]] && continue
+        if brew_cask_installed "${candidate}"; then
+          printf 'Found host Homebrew cask "%s" for %s; uninstalling...\n' "${candidate}" "${cmd}"
+          if brew uninstall --cask "${candidate}"; then
+            removed+=("${candidate} (brew cask)")
+          else
+            failed+=("${candidate} (brew cask)")
+            printf 'Warning: failed to uninstall Homebrew cask %s; leaving it in place.\n' "${candidate}" >&2
+          fi
+        fi
+      done < <(brew_cask_candidates_for "${cmd}")
+
+      while IFS= read -r candidate; do
+        [[ -z "${candidate}" ]] && continue
+        if brew_formula_installed "${candidate}"; then
+          printf 'Found host Homebrew formula "%s" for %s; uninstalling...\n' "${candidate}" "${cmd}"
+          if brew uninstall "${candidate}"; then
+            removed+=("${candidate} (brew formula)")
+          else
+            failed+=("${candidate} (brew formula)")
+            printf 'Warning: failed to uninstall Homebrew formula %s; leaving it in place.\n' "${candidate}" >&2
+          fi
+        fi
+      done < <(brew_formula_candidates_for "${cmd}")
+    done
+  else
+    printf 'Homebrew (brew) not found on host; skipping Homebrew check for claude, codex, copilot.\n' >&2
+  fi
+
+  if claude_native_install_present; then
+    printf 'Found Claude Code native installer state (%s); removing...\n' "${CLAUDE_NATIVE_STATE_DIR}"
+    if remove_claude_native_install; then
+      removed+=("claude (native installer)")
+    else
+      failed+=("claude (native installer)")
+      printf 'Warning: failed to fully remove the Claude Code native installer; some files may remain.\n' >&2
+    fi
+  fi
+
+  if codex_native_install_present; then
+    printf 'Found Codex native installer state (%s); removing...\n' "${CODEX_NATIVE_STATE_DIR}"
+    if remove_codex_native_install; then
+      removed+=("codex (native installer)")
+    else
+      failed+=("codex (native installer)")
+      printf 'Warning: failed to fully remove the Codex native installer; some files may remain.\n' >&2
+    fi
+  fi
+
+  if command -v gh >/dev/null 2>&1; then
+    gh_status=0
+    gh_copilot_extension_installed || gh_status=$?
+    if (( gh_status == 0 )); then
+      printf 'Found deprecated gh extension "%s"; removing...\n' "${GH_COPILOT_EXTENSION}"
+      if gh extension remove "${GH_COPILOT_EXTENSION}"; then
+        removed+=("${GH_COPILOT_EXTENSION} (gh extension)")
+      else
+        failed+=("${GH_COPILOT_EXTENSION} (gh extension)")
+        printf 'Warning: failed to remove gh extension %s; leaving it in place.\n' "${GH_COPILOT_EXTENSION}" >&2
+      fi
+    elif (( gh_status == 2 )); then
+      printf 'Warning: could not query gh extensions (gh extension list failed, possibly not authenticated); skipping gh-copilot extension check.\n' >&2
+    fi
+  else
+    printf 'gh not found on host; skipping deprecated gh-copilot extension check.\n' >&2
+  fi
+
+  if (( ${#removed[@]} == 0 && ${#failed[@]} == 0 )); then
+    printf 'Host cleanup: no host-side install of claude, codex, or copilot found; nothing to uninstall.\n'
+    return 0
+  fi
+
+  removed_str="none"
+  failed_str="none"
+  (( ${#removed[@]} > 0 )) && removed_str="$(IFS=', '; printf '%s' "${removed[*]}")"
+  (( ${#failed[@]} > 0 )) && failed_str="$(IFS=', '; printf '%s' "${failed[*]}")"
+  printf 'Host cleanup: removed [%s]; failed to remove [%s].\n' "${removed_str}" "${failed_str}"
 }
 
 container_exists() {
@@ -186,6 +459,8 @@ check_host_bin_on_path() {
 
 main() {
   check_host_prerequisites
+
+  cleanup_host_ai_clis
 
   # Always recreate rather than reuse: a reused container can silently carry
   # over a half-applied prior install or drifted packages, so install.sh
