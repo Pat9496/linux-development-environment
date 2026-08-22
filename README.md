@@ -112,6 +112,8 @@ codex list
 copilot auth login
 ```
 
+**Daily update check:** Before running your command, each wrapper checks a per-tool timestamp file under `~/.local/state/devenv/`. If more than 24 hours have passed since the last check, it runs `npm install -g <package>@latest` inside the `DEVenv` container for its own AI CLI package before continuing. This uses `sudo -n`, so it never blocks waiting for a password prompt—if no cached sudo credentials are available, it prints a warning and continues with the currently installed version. This check adds no delay on the many days it doesn't trigger, and never blocks or fails your actual command even on the day it does.
+
 **PATH configuration:** For the wrappers to be found from any directory, `~/.local/bin` must be on your shell's `PATH`. The installation script checks for this after creating the wrappers. If `~/.local/bin` is not on your PATH, the script prints a reminder suggesting you add it to your shell startup file. To do so, add this line to `~/.bashrc`, `~/.zshrc`, or your shell's equivalent startup file:
 
 ```bash

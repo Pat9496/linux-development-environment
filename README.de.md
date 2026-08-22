@@ -112,6 +112,8 @@ codex list
 copilot auth login
 ```
 
+**Tägliche Update-Prüfung:** Vor der Ausführung des Befehls überprüft jeder Wrapper eine zeitgestempelte Datei pro Tool unter `~/.local/state/devenv/`. Falls mehr als 24 Stunden seit der letzten Prüfung vergangen sind, führt er `npm install -g <package>@latest` innerhalb des `DEVenv`-Containers für sein eigenes AI-CLI-Paket aus, bevor der Befehl fortgesetzt wird. Dies nutzt `sudo -n`, sodass der Wrapper niemals auf eine Passwortaufforderung wartet — sind keine zwischengespeicherten sudo-Anmeldedaten verfügbar, gibt er eine Warnung aus und setzt die Nutzung der aktuell installierten Version fort. Diese Prüfung verursacht an den vielen Tagen, an denen sie nicht ausgelöst wird, keine Verzögerung und blockiert oder beschädigt den tatsächlichen Befehl nicht, auch nicht an dem Tag, an dem sie ausgelöst wird.
+
 **PATH-Konfiguration:** Damit die Wrapper von jedem Verzeichnis aus gefunden werden, muss `~/.local/bin` in der PATH-Variable der Shell enthalten sein. Das Installationsskript überprüft dies nach der Erstellung der Wrapper. Falls `~/.local/bin` nicht in PATH enthalten ist, gibt das Skript eine Erinnerung aus, die vorschlägt, es in die Shell-Startdatei hinzuzufügen. Hierzu ist folgende Zeile in `~/.bashrc`, `~/.zshrc` oder in der entsprechenden Startdatei der Shell einzufügen:
 
 ```bash

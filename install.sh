@@ -15,6 +15,7 @@ readonly CONTAINER_NAME="DEVenv"
 readonly BASE_IMAGE="registry.fedoraproject.org/fedora-toolbox:latest"
 readonly DEFAULT_DEVENV_HOME="${HOME}/DEVenv-home"
 readonly HOST_BIN_DIR="${HOME}/.local/bin"
+readonly WRAPPER_UPDATE_STATE_DIR="${HOME}/.local/state/devenv"
 readonly AI_CLI_WRAPPER_COMMANDS=(
   "claude"
   "codex"
@@ -407,12 +408,14 @@ run_bootstrap_in_container() {
 }
 
 install_host_wrappers() {
-  local name="$1" cmd wrapper_path tmp_path=""
+  local name="$1" i cmd npm_pkg wrapper_path tmp_path=""
   mkdir -p -- "${HOST_BIN_DIR}"
 
   trap '[[ -n "${tmp_path}" ]] && rm -f -- "${tmp_path}"' EXIT
 
-  for cmd in "${AI_CLI_WRAPPER_COMMANDS[@]}"; do
+  for i in "${!AI_CLI_WRAPPER_COMMANDS[@]}"; do
+    cmd="${AI_CLI_WRAPPER_COMMANDS[$i]}"
+    npm_pkg="${AI_CLI_NPM_PACKAGES[$i]}"
     wrapper_path="${HOST_BIN_DIR}/${cmd}"
     tmp_path="$(mktemp -- "${HOST_BIN_DIR}/.${cmd}.XXXXXX")"
     cat > "${tmp_path}" <<WRAPPER_EOF
@@ -433,6 +436,19 @@ if [[ "\${CONTAINER_ID:-}" == "${name}" ]]; then
   done
   PATH="\${filtered_path}" exec "${cmd}" "\$@"
 else
+  state_file="${WRAPPER_UPDATE_STATE_DIR}/${cmd}"
+  now_ts="\$(date +%s)"
+  last_ts=0
+  if [[ -f "\${state_file}" ]]; then
+    last_ts="\$(cat -- "\${state_file}" 2>/dev/null || printf '0')"
+  fi
+  if (( now_ts - last_ts >= 86400 )); then
+    mkdir -p -- "${WRAPPER_UPDATE_STATE_DIR}" 2>/dev/null
+    if ! distrobox enter "${name}" -- sudo -n npm install -g ${npm_pkg}@latest; then
+      printf 'Warning: daily update check for ${cmd} failed (may need interactive sudo inside the container); continuing with the currently installed version.\n' >&2
+    fi
+    printf '%s' "\${now_ts}" > "\${state_file}" 2>/dev/null
+  fi
   exec distrobox enter "${name}" -- ${cmd} "\$@"
 fi
 WRAPPER_EOF
