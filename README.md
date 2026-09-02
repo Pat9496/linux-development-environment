@@ -44,7 +44,7 @@ The installation script itself is self-contained and will set up everything else
 Clone this repository on the host system, then run the installation script:
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/Pat9496/linux-development-environment DEVenv
 cd DEVenv
 ./install.sh
 ```
@@ -151,7 +151,6 @@ DEVenv builds on and depends on the following upstream projects:
 
 - **Distrobox** — Container entry point and lifecycle management
 - **Fedora Toolbox** — Base container image (`registry.fedoraproject.org/fedora-toolbox:latest`)
-- **Claude Code** — AI assistant by Anthropic
-- **Codex** — AI assistant by OpenAI
-- **Copilot CLI** — AI assistant by GitHub
+- **Codex** — AI assistant
+- **Copilot CLI** — AI assistant
 

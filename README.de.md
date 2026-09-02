@@ -2,7 +2,7 @@
 
 [![ShellCheck](https://github.com/Pat9496/linux-development-environment/actions/workflows/shellcheck.yml/badge.svg)](https://github.com/Pat9496/linux-development-environment/actions/workflows/shellcheck.yml)
 [![Shell: Bash](https://img.shields.io/badge/shell-bash-blue)](https://www.gnu.org/software/bash/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 [English version](README.md)
 
@@ -44,7 +44,7 @@ Das Installationsskript selbst ist eigenständig und richtet alles weitere inner
 Das Repository auf dem Host klonen und dann das Installationsskript ausführen:
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/Pat9496/linux-development-environment DEVenv
 cd DEVenv
 ./install.sh
 ```
@@ -147,10 +147,9 @@ Beiträge sind willkommen. Ein Issue sollte erstellt werden, um Ideen vor der Ei
 
 ## Danksagung
 
-Das DEVenv-Installationsskript baut auf etablierten, quelloffenen Werkzeugen und Plattformen auf. Danke an die Maintainer und Beitragende der folgenden Projekte:
+DEVenv baut auf und ist abhängig von den folgenden vorgelagerten Projekten:
 
-- **Distrobox** – für die containerisierte Entwicklungsumgebung
-- **Fedora Toolbox** – für das stabile Basis-Container-Image
-- **Claude Code** (Anthropic) – für die integrierte KI-Entwicklungsassistenz
-- **Codex** (OpenAI) – für zusätzliche Code-Intelligenz
-- **Copilot CLI** (GitHub) – für die GitHub-integrierte KI-Unterstützung
+- **Distrobox** — Einstiegspunkt und Lebenszyklusverwaltung des Containers
+- **Fedora Toolbox** — Container-Basis-Image (`registry.fedoraproject.org/fedora-toolbox:latest`)
+- **Codex** — KI-Assistent
+- **Copilot CLI** — KI-Assistent
