@@ -13,6 +13,7 @@
 - [Erste Schritte](#erste-schritte)
   - [Das Installationsskript ausführen](#das-installationsskript-ausführen)
   - [Installationseingaben](#installationseingaben)
+  - [Befehlszeilenoptionen](#befehlszeilenoptionen)
   - [Den Container betreten](#den-container-betreten)
 - [Host-Bereinigung](#host-bereinigung)
 - [Was wird installiert](#was-wird-installiert)
@@ -59,6 +60,58 @@ Während der Installation werden die folgenden Informationen abgefragt:
 2. Wird ein separates Home gewählt, kann optional die vorhandene Claude Code-, Codex- und Copilot CLI-Konfiguration vom Host in das neue Container-Home kopiert werden.
 
 **Container-Neuanlage:** Das Skript zerstört und erstellt den Container bei jedem Lauf neu. Dies ist beabsichtigt — es verhindert, dass eine halb angewandte vorherige Installation oder abweichende Pakete stillschweigend mitgenommen werden. Existiert bereits ein Container mit dem Namen `DEVenv`, warnt das Skript und entfernt ihn vor der Erstellung eines neuen.
+
+### Befehlszeilenoptionen
+
+Sowohl `install.sh` als auch `distrobox-bootstrap.sh` akzeptieren Befehlszeilenoptionen, um Eingabeaufforderungen zu überspringen und unbeaufsichtigt auszuführen. Ohne Optionen ist das Verhalten unverändert und jede Wahl wird interaktiv abgefragt.
+
+**install.sh-Optionen**
+
+- `-y, --non-interactive` — Keine Eingabeaufforderungen. Die unten aufgeführten Standardwerte verwenden oder mit einem Fehler beenden. Ohne dieses Flag wird eine Eingabeaufforderung, die das Ende der Eingabe liest (beispielsweise `curl ... | bash`), als Fehler behandelt, anstatt stillschweigend einen Standardwert zu verwenden. Zur unbeaufsichtigten Ausführung explizite Flags übergeben oder `-y` verwenden.
+- `--home-mode existing|separate` — Den Home-Verzeichnis-Modus setzen. Standardwert bei unbeaufsichtigt: `existing`.
+- `--devenv-home PATH` — Pfad für das separate DEVenv-Home-Verzeichnis. Impliziert `--home-mode separate`. Akzeptiert absolute Pfade oder mit Tilde präfixierte Pfade; Standard bei unbeaufsichtigt: `~/DEVenv-home`.
+- `--copy-ai-config` — Vorhandene Claude Code-, Codex- und Copilot CLI-Konfiguration vom Host in das neue DEVenv-Home kopieren (gilt nur für separaten Home-Modus).
+- `--no-copy-ai-config` — AI-Konfiguration nicht kopieren. Dies ist der Standard bei unbeaufsichtigt.
+- `--overwrite-existing-config` — Bestehende AI-Config-Pfade im DEVenv-Home ohne Rückfrage überschreiben. Standardmäßig fragt das Skript vor dem Überschreiben nach.
+- `--no-host-cleanup` — Das Entfernen von host-seitigen Installationen von claude, codex oder copilot überspringen.
+- `--no-auto-update` — Wrapper-Skripte generieren, die die npm-Update-Prüfung bei jedem Aufruf überspringen. Standardmäßig prüfen die Wrapper auf Updates jedes Mal, wenn `claude`, `codex` oder `copilot` vom Host aus ausgeführt wird.
+- `--wrapper-dir DIR` — Host-Wrapper-Skripte in einem anderen Verzeichnis als `~/.local/bin` installieren. Muss ein absoluter Pfad sein.
+- `--dry-run` — Geplante Aktionen ausgeben und beenden, ohne Änderungen vorzunehmen.
+- `-h, --help` — Nutzungsinformationen anzeigen und beenden.
+
+Optionen akzeptieren beide `--option value`- und `--option=value`-Syntax. Das `--`-Argument beendet das Parsen von Optionen.
+
+**Optionsbeschränkungen**
+
+- Das Übergeben von `--copy-ai-config` mit `--home-mode existing` ist ein Fehler (AI-Konfiguration wird nur in ein separates Home kopiert). Dies gilt auch für `-y --copy-ai-config` ohne `--home-mode separate`, da `-y` auf `existing` als Standard setzt.
+- Das Übergeben von sowohl `--copy-ai-config` als auch `--no-copy-ai-config` ist ein Fehler.
+- Das Übergeben von `--devenv-home PATH` mit `--home-mode existing` ist ein Fehler (ein separates Home ist für einen benutzerdefinierten Pfad erforderlich).
+- Der Container-Name (`DEVenv`), das Basis-Image (`registry.fedoraproject.org/fedora-toolbox:latest`) und das Verhalten, den Container immer neu zu erstellen, sind hardcodiert und bewusst nicht konfigurierbar.
+
+**distrobox-bootstrap.sh-Optionen**
+
+Das Bootstrap-Skript wird normalerweise von `install.sh` innerhalb des Containers aufgerufen und ist nicht für die direkte Ausführung auf dem Host vorgesehen. Das Bootstrap-Skript akzeptiert:
+
+- `--skip-ai-clis` — System-Entwicklungstoolchain installieren, aber npm-Pakete für claude, codex und copilot überspringen.
+- `--pkg-manager apt|dnf|zypper|pacman|apk` — Bestimmten Package Manager verwenden statt Auto-Erkennung.
+- `--dry-run` — Geplante Aktionen ausgeben und beenden, ohne Änderungen vorzunehmen.
+- `-h, --help` — Nutzungsinformationen anzeigen und beenden.
+
+`install.sh` übergibt `--skip-ai-clis` oder `--pkg-manager` nicht an das Bootstrap-Skript; das Bootstrap-Skript verwendet diese Optionen nur bei direktem Aufruf (was nicht der normale Arbeitsablauf ist).
+
+**Beispiele**
+
+Unbeaufsichtigte vollständige Installation mit separatem Home und AI-Config-Kopie:
+
+```bash
+./install.sh -y --home-mode separate --copy-ai-config
+```
+
+Dry Run zum Überprüfen geplanter Aktionen:
+
+```bash
+./install.sh --dry-run
+```
 
 ### Den Container betreten
 

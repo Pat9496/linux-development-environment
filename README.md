@@ -13,6 +13,7 @@
 - [Getting Started](#getting-started)
   - [Running the Installation Script](#running-the-installation-script)
   - [Installation Prompts](#installation-prompts)
+  - [Command-Line Options](#command-line-options)
   - [Entering the Container](#entering-the-container)
 - [Host Cleanup](#host-cleanup)
 - [What Gets Installed](#what-gets-installed)
@@ -59,6 +60,58 @@ During installation, you will be prompted for the following:
 2. If you choose a separate home, you may optionally copy existing Claude Code, Codex, and Copilot CLI configuration from the host into the new container home.
 
 **Container Recreation:** The script always destroys and recreates the container from scratch on every run. This is intentional — it prevents silently carrying over a half-applied prior installation or drifted packages. If a container named `DEVenv` already exists, the script will warn you and remove it before creating a new one.
+
+### Command-Line Options
+
+Both `install.sh` and `distrobox-bootstrap.sh` accept command-line options to skip prompts and run unattended. With no options, behavior is unchanged and every choice is prompted interactively.
+
+**install.sh Options**
+
+- `-y, --non-interactive` — Never prompt. Use the defaults listed below or exit with an error. Without this flag, a prompt that reads end-of-input (for example, `curl ... | bash`) is treated as an error instead of silently using a default. Pass explicit flags or use `-y` to run unattended.
+- `--home-mode existing|separate` — Set the home directory mode. Default when non-interactive: `existing`.
+- `--devenv-home PATH` — Path for the separate DEVenv home directory. Implies `--home-mode separate`. Accepts absolute paths or tilde-prefixed paths; defaults to `~/DEVenv-home` when non-interactive.
+- `--copy-ai-config` — Copy existing Claude Code, Codex, and Copilot CLI configuration from the host into the new DEVenv home (only applies to separate home mode).
+- `--no-copy-ai-config` — Do not copy AI configuration. This is the default when non-interactive.
+- `--overwrite-existing-config` — Overwrite AI config paths already present in the DEVenv home without prompting. By default, the script asks before overwriting.
+- `--no-host-cleanup` — Skip the removal of any host-side installs of claude, codex, or copilot.
+- `--no-auto-update` — Generate wrapper scripts that skip the per-invocation npm update check. By default, the wrappers check for updates every time you run `claude`, `codex`, or `copilot` from the host.
+- `--wrapper-dir DIR` — Install the host wrapper scripts to a different directory instead of `~/.local/bin`. Must be an absolute path.
+- `--dry-run` — Print the planned actions and exit without making any changes.
+- `-h, --help` — Show usage information and exit.
+
+Options accept both `--option value` and `--option=value` syntax. A `--` argument ends option parsing.
+
+**Option Constraints**
+
+- Passing `--copy-ai-config` with `--home-mode existing` is an error (AI config is only copied into a separate home). The same applies to `-y --copy-ai-config` without `--home-mode separate`, because `-y` defaults to `existing`.
+- Passing both `--copy-ai-config` and `--no-copy-ai-config` is an error.
+- Passing `--devenv-home PATH` with `--home-mode existing` is an error (a separate home is required for a custom path).
+- The container name (`DEVenv`), base image (`registry.fedoraproject.org/fedora-toolbox:latest`), and always-recreate behavior are hardcoded and intentionally not configurable.
+
+**distrobox-bootstrap.sh Options**
+
+The bootstrap script is normally invoked by `install.sh` inside the container and is not meant to be run directly on the host. The bootstrap script itself accepts:
+
+- `--skip-ai-clis` — Install the system development toolchain but skip the npm packages for claude, codex, and copilot.
+- `--pkg-manager apt|dnf|zypper|pacman|apk` — Use a specific package manager instead of auto-detecting it.
+- `--dry-run` — Print planned actions and exit without making any changes.
+- `-h, --help` — Show usage information and exit.
+
+`install.sh` does not pass `--skip-ai-clis` or `--pkg-manager` to the bootstrap script; the bootstrap script only uses these options if invoked directly (which is not the normal workflow).
+
+**Examples**
+
+Unattended full installation with separate home and AI config copy:
+
+```bash
+./install.sh -y --home-mode separate --copy-ai-config
+```
+
+Dry run to see what would happen:
+
+```bash
+./install.sh --dry-run
+```
 
 ### Entering the Container
 

@@ -19,6 +19,91 @@ readonly AI_CLI_NPM_PACKAGES=(
 readonly MISE_INSTALL_URL="https://mise.run"
 readonly MISE_INSTALL_PATH="${HOME}/.local/bin/mise"
 
+OPT_SKIP_AI_CLIS=0
+OPT_PKG_MANAGER=""
+OPT_DRY_RUN=0
+
+run_or_plan() {
+  if (( OPT_DRY_RUN )); then
+    printf '[dry-run] would run:'
+    printf ' %q' "$@"
+    printf '\n'
+    return 0
+  fi
+  "$@"
+}
+
+usage() {
+  printf 'Usage: distrobox-bootstrap.sh [OPTIONS]\n\n'
+  printf 'Installs the development toolchain inside the container it runs in. Normally\n'
+  printf 'invoked by install.sh via "distrobox enter", not run directly on the host.\n\n'
+  printf 'Options:\n'
+  printf '      --skip-ai-clis            Install the system toolchain only, skip the npm AI CLIs\n'
+  printf '      --pkg-manager MGR         Use MGR instead of detecting it (apt|dnf|zypper|pacman|apk)\n'
+  printf '      --dry-run                 Print planned actions, change nothing\n'
+  printf '  -h, --help                    Show this help and exit\n\n'
+  printf 'Options accept both "--option value" and "--option=value"; "--" ends option parsing.\n'
+}
+
+parse_args() {
+  local opt value has_value
+  while (( $# > 0 )); do
+    opt="$1"
+    value=""
+    has_value=0
+    if [[ "${opt}" == --*=* ]]; then
+      value="${opt#*=}"
+      opt="${opt%%=*}"
+      has_value=1
+    fi
+
+    case "${opt}" in
+      --pkg-manager)
+        if (( ! has_value )); then
+          if (( $# < 2 )) || [[ "$2" == -* ]]; then
+            printf 'Error: option %s requires a value.\n' "${opt}" >&2
+            exit 1
+          fi
+          value="$2"
+          shift
+        fi
+        case "${value}" in
+          apt|dnf|zypper|pacman|apk) OPT_PKG_MANAGER="${value}" ;;
+          *)
+            printf 'Error: invalid --pkg-manager '"'"'%s'"'"'; expected one of apt, dnf, zypper, pacman, apk.\n' "${value}" >&2
+            exit 1
+            ;;
+        esac
+        ;;
+      -h|--help|--skip-ai-clis|--dry-run|--)
+        if (( has_value )); then
+          printf 'Error: option %s does not take a value.\n' "${opt}" >&2
+          exit 1
+        fi
+        case "${opt}" in
+          -h|--help) usage; exit 0 ;;
+          --skip-ai-clis) OPT_SKIP_AI_CLIS=1 ;;
+          --dry-run) OPT_DRY_RUN=1 ;;
+          --) shift; break ;;
+        esac
+        ;;
+      -*)
+        printf 'Error: unknown option '"'"'%s'"'"'. Run with --help for usage.\n' "${opt}" >&2
+        exit 1
+        ;;
+      *)
+        printf 'Error: unexpected argument '"'"'%s'"'"'. Run with --help for usage.\n' "${opt}" >&2
+        exit 1
+        ;;
+    esac
+    shift
+  done
+  if (( $# > 0 )); then
+    printf 'Error: unexpected argument '"'"'%s'"'"'. Run with --help for usage.\n' "$1" >&2
+    exit 1
+  fi
+}
+
 detect_pkg_manager() {
   if command -v apt-get >/dev/null 2>&1; then
     printf '%s\n' apt
@@ -38,9 +123,9 @@ detect_pkg_manager() {
 refresh_index() {
   local mgr="$1"
   case "${mgr}" in
-    apt) sudo apt-get update -y ;;
-    pacman) sudo pacman -Sy --noconfirm ;;
-    apk) sudo apk update ;;
+    apt) run_or_plan sudo apt-get update -y ;;
+    pacman) run_or_plan sudo pacman -Sy --noconfirm ;;
+    apk) run_or_plan sudo apk update ;;
     dnf|zypper) ;;
   esac
 }
@@ -48,11 +133,11 @@ refresh_index() {
 install_pkg() {
   local mgr="$1" pkg="$2"
   case "${mgr}" in
-    apt) sudo apt-get install -y "${pkg}" ;;
-    dnf) sudo dnf install -y "${pkg}" ;;
-    zypper) sudo zypper --non-interactive install "${pkg}" ;;
-    pacman) sudo pacman -S --noconfirm "${pkg}" ;;
-    apk) sudo apk add "${pkg}" ;;
+    apt) run_or_plan sudo apt-get install -y "${pkg}" ;;
+    dnf) run_or_plan sudo dnf install -y "${pkg}" ;;
+    zypper) run_or_plan sudo zypper --non-interactive install "${pkg}" ;;
+    pacman) run_or_plan sudo pacman -S --noconfirm "${pkg}" ;;
+    apk) run_or_plan sudo apk add "${pkg}" ;;
   esac
 }
 
@@ -88,6 +173,11 @@ packages_for() {
 }
 
 install_mise() {
+  if (( OPT_DRY_RUN )); then
+    printf '[dry-run] would download %s and run it with sh\n' "${MISE_INSTALL_URL}"
+    return 0
+  fi
+
   if ! command -v curl >/dev/null 2>&1; then
     printf 'Error: curl not found inside the container; cannot fetch the mise installer.\n' >&2
     return 1
@@ -95,7 +185,9 @@ install_mise() {
 
   local mise_installer
   mise_installer="$(mktemp)"
-  trap 'rm -f -- "${mise_installer}"' RETURN
+  # A RETURN trap outlives the function that set it; it must remove itself so
+  # it cannot fire on later returns, where the local is gone (unbound under set -u).
+  trap 'rm -f -- "${mise_installer}"; trap - RETURN' RETURN
 
   if ! curl -fsSL "${MISE_INSTALL_URL}" -o "${mise_installer}"; then
     printf 'Warning: could not download the mise installer from %s.\n' "${MISE_INSTALL_URL}" >&2
@@ -123,17 +215,32 @@ print_activation_notes() {
 }
 
 main() {
+  parse_args "$@"
+
   if ! command -v sudo >/dev/null 2>&1; then
     printf 'Error: sudo not found inside the container; cannot install packages.\n' >&2
     exit 1
   fi
 
-  local pkg_manager
-  if ! pkg_manager="$(detect_pkg_manager)"; then
-    printf 'Error: no supported package manager found (looked for apt-get, dnf, zypper, pacman, apk).\n' >&2
-    exit 1
+  local pkg_manager pkg_manager_command
+  if [[ -n "${OPT_PKG_MANAGER}" ]]; then
+    pkg_manager="${OPT_PKG_MANAGER}"
+    pkg_manager_command="${pkg_manager}"
+    if [[ "${pkg_manager}" == "apt" ]]; then
+      pkg_manager_command="apt-get"
+    fi
+    if ! command -v "${pkg_manager_command}" >/dev/null 2>&1; then
+      printf 'Error: %s not found inside the container; cannot use --pkg-manager %s.\n' "${pkg_manager_command}" "${pkg_manager}" >&2
+      exit 1
+    fi
+    printf 'Using package manager from --pkg-manager: %s\n' "${pkg_manager}"
+  else
+    if ! pkg_manager="$(detect_pkg_manager)"; then
+      printf 'Error: no supported package manager found (looked for apt-get, dnf, zypper, pacman, apk).\n' >&2
+      exit 1
+    fi
+    printf 'Detected package manager: %s\n' "${pkg_manager}"
   fi
-  printf 'Detected package manager: %s\n' "${pkg_manager}"
 
   refresh_index "${pkg_manager}"
 
@@ -155,19 +262,23 @@ main() {
     printf 'Warning: failed to install mise, continuing.\n' >&2
   fi
 
-  if ! command -v npm >/dev/null 2>&1; then
-    printf 'Error: npm is not available after package installation; cannot install the AI CLIs.\n' >&2
-    exit 1
-  fi
-
   local -a failed_ai_clis=()
-  for pkg in "${AI_CLI_NPM_PACKAGES[@]}"; do
-    printf 'Installing %s via npm...\n' "${pkg}"
-    if ! sudo npm install -g "${pkg}"; then
-      failed_ai_clis+=("${pkg}")
-      printf 'Warning: failed to install %s.\n' "${pkg}" >&2
+  if (( OPT_SKIP_AI_CLIS )); then
+    printf 'Skipping AI CLI installation (--skip-ai-clis).\n'
+  else
+    if (( ! OPT_DRY_RUN )) && ! command -v npm >/dev/null 2>&1; then
+      printf 'Error: npm is not available after package installation; cannot install the AI CLIs.\n' >&2
+      exit 1
     fi
-  done
+
+    for pkg in "${AI_CLI_NPM_PACKAGES[@]}"; do
+      printf 'Installing %s via npm...\n' "${pkg}"
+      if ! run_or_plan sudo npm install -g "${pkg}"; then
+        failed_ai_clis+=("${pkg}")
+        printf 'Warning: failed to install %s.\n' "${pkg}" >&2
+      fi
+    done
+  fi
 
   if (( ${#failed_packages[@]} > 0 )); then
     printf 'The following system packages could not be installed: %s\n' "${failed_packages[*]}" >&2
@@ -178,6 +289,11 @@ main() {
   fi
   if (( ${#failed_optional_tools[@]} > 0 )); then
     printf 'The following optional tools could not be installed: %s\n' "${failed_optional_tools[*]}" >&2
+  fi
+
+  if (( OPT_DRY_RUN )); then
+    printf '[dry-run] Done; nothing was changed.\n'
+    return 0
   fi
 
   print_activation_notes

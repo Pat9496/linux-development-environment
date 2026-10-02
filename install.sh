@@ -14,7 +14,8 @@ readonly BOOTSTRAP_SCRIPT="${SCRIPT_DIR}/distrobox-bootstrap.sh"
 readonly CONTAINER_NAME="DEVenv"
 readonly BASE_IMAGE="registry.fedoraproject.org/fedora-toolbox:latest"
 readonly DEFAULT_DEVENV_HOME="${HOME}/DEVenv-home"
-readonly HOST_BIN_DIR="${HOME}/.local/bin"
+readonly DEFAULT_HOST_BIN_DIR="${HOME}/.local/bin"
+readonly NO_INPUT_MESSAGE="no input available on stdin (closed or exhausted); pass explicit options (see --help) or use -y/--non-interactive to accept the defaults."
 readonly AI_CLI_WRAPPER_COMMANDS=(
   "claude"
   "codex"
@@ -41,9 +42,155 @@ readonly CLAUDE_NATIVE_STATE_DIR="${HOME}/.local/share/claude"
 readonly CODEX_NATIVE_STATE_DIR="${HOME}/.codex/packages/standalone"
 readonly GH_COPILOT_EXTENSION="github/gh-copilot"
 
+OPT_NON_INTERACTIVE=0
+OPT_HOME_MODE=""
+OPT_DEVENV_HOME=""
+OPT_COPY_AI_CONFIG=""
+OPT_OVERWRITE_EXISTING=0
+OPT_HOST_CLEANUP=1
+OPT_AUTO_UPDATE=1
+OPT_WRAPPER_DIR=""
+OPT_DRY_RUN=0
+
+AI_CONFIG_COPY_PLAN=()
+WRAPPER_TMP_PATH=""
+
 die() {
   printf 'Error: %s\n' "$1" >&2
   exit 1
+}
+
+run_or_plan() {
+  if (( OPT_DRY_RUN )); then
+    printf '[dry-run] would run:'
+    printf ' %q' "$@"
+    printf '\n'
+    return 0
+  fi
+  "$@"
+}
+
+usage() {
+  printf 'Usage: install.sh [OPTIONS]\n\n'
+  printf 'Creates the "%s" Distrobox development container and installs host-side wrappers\n' "${CONTAINER_NAME}"
+  printf 'for claude, codex, and copilot. With no options every choice is asked interactively.\n\n'
+  printf 'Options:\n'
+  printf '  -y, --non-interactive         Never prompt; use the defaults below or fail\n'
+  printf '      --home-mode MODE          existing | separate (default when non-interactive: existing)\n'
+  printf '      --devenv-home PATH        Path for the separate home (implies --home-mode separate;\n'
+  printf '                                default when non-interactive: %s)\n' "${DEFAULT_DEVENV_HOME}"
+  printf '      --copy-ai-config          Copy AI configs into the separate home\n'
+  printf '      --no-copy-ai-config       Do not copy them (default when non-interactive)\n'
+  printf '      --overwrite-existing-config\n'
+  printf '                                Overwrite config paths already present in the DEVenv home\n'
+  printf '                                without asking (default when non-interactive: keep them)\n'
+  printf '      --no-host-cleanup         Skip removal of host-side claude, codex, and copilot installs\n'
+  printf '      --no-auto-update          Generate wrappers that do not npm-update on every invocation\n'
+  printf '      --wrapper-dir DIR         Directory for the host wrappers (default: %s)\n' "${DEFAULT_HOST_BIN_DIR}"
+  printf '      --dry-run                 Print planned actions, change nothing\n'
+  printf '  -h, --help                    Show this help and exit\n\n'
+  printf 'Options accept both "--option value" and "--option=value"; "--" ends option parsing.\n'
+  printf 'Without -y, a prompt that reads end-of-input (e.g. "curl ... | bash") is an error.\n'
+}
+
+resolve_devenv_home() {
+  local path="$1"
+  path="${path/#\~/${HOME}}"
+  while [[ "${path}" == */ && "${path}" != "/" ]]; do
+    path="${path%/}"
+  done
+  if [[ -z "${path}" || "${path}" == "/" || "${path}" == "${HOME}" ]]; then
+    die "refusing to use '${path}' as the DEVenv home; choose a dedicated path that is not '/' or your real home."
+  fi
+  printf '%s\n' "${path}"
+}
+
+resolve_wrapper_dir() {
+  local path="$1"
+  path="${path/#\~/${HOME}}"
+  while [[ "${path}" == */ && "${path}" != "/" ]]; do
+    path="${path%/}"
+  done
+  [[ "${path}" == /* ]] || die "--wrapper-dir must be an absolute path (got '${path}')."
+  # The path is embedded in double quotes in the generated wrapper scripts.
+  if [[ "${path}" == *[\"\$\`\\]* ]]; then
+    die "--wrapper-dir must not contain double quotes, dollar signs, backticks, or backslashes (got '${path}')."
+  fi
+  printf '%s\n' "${path}"
+}
+
+parse_args() {
+  local opt value has_value
+  while (( $# > 0 )); do
+    opt="$1"
+    value=""
+    has_value=0
+    if [[ "${opt}" == --*=* ]]; then
+      value="${opt#*=}"
+      opt="${opt%%=*}"
+      has_value=1
+    fi
+
+    case "${opt}" in
+      --home-mode|--devenv-home|--wrapper-dir)
+        if (( ! has_value )); then
+          (( $# >= 2 )) && [[ "$2" != -* ]] || die "option '${opt}' requires a value."
+          value="$2"
+          shift
+        fi
+        [[ -n "${value}" ]] || die "option '${opt}' requires a non-empty value."
+        ;;
+      -h|--help|-y|--non-interactive|--copy-ai-config|--no-copy-ai-config|--overwrite-existing-config|--no-host-cleanup|--no-auto-update|--dry-run|--)
+        (( ! has_value )) || die "option '${opt}' does not take a value."
+        ;;
+    esac
+
+    case "${opt}" in
+      -h|--help) usage; exit 0 ;;
+      -y|--non-interactive) OPT_NON_INTERACTIVE=1 ;;
+      --home-mode)
+        case "${value}" in
+          existing|separate) OPT_HOME_MODE="${value}" ;;
+          *) die "invalid --home-mode '${value}'; expected 'existing' or 'separate'." ;;
+        esac
+        ;;
+      --devenv-home) OPT_DEVENV_HOME="${value}" ;;
+      --copy-ai-config)
+        [[ "${OPT_COPY_AI_CONFIG}" != "no" ]] || die "--copy-ai-config and --no-copy-ai-config cannot be combined."
+        OPT_COPY_AI_CONFIG="yes"
+        ;;
+      --no-copy-ai-config)
+        [[ "${OPT_COPY_AI_CONFIG}" != "yes" ]] || die "--copy-ai-config and --no-copy-ai-config cannot be combined."
+        OPT_COPY_AI_CONFIG="no"
+        ;;
+      --overwrite-existing-config) OPT_OVERWRITE_EXISTING=1 ;;
+      --no-host-cleanup) OPT_HOST_CLEANUP=0 ;;
+      --no-auto-update) OPT_AUTO_UPDATE=0 ;;
+      --wrapper-dir) OPT_WRAPPER_DIR="${value}" ;;
+      --dry-run) OPT_DRY_RUN=1 ;;
+      --) shift; break ;;
+      -*) die "unknown option '${opt}'. Run with --help for usage." ;;
+      *) die "unexpected argument '${opt}'. Run with --help for usage." ;;
+    esac
+    shift
+  done
+  (( $# == 0 )) || die "unexpected argument '$1'. Run with --help for usage."
+
+  if [[ -n "${OPT_DEVENV_HOME}" ]]; then
+    [[ "${OPT_HOME_MODE:-separate}" == "separate" ]] || die "--devenv-home cannot be combined with --home-mode existing."
+    OPT_HOME_MODE="separate"
+    OPT_DEVENV_HOME="$(resolve_devenv_home "${OPT_DEVENV_HOME}")"
+  fi
+
+  if [[ "${OPT_COPY_AI_CONFIG}" == "yes" ]]; then
+    if [[ "${OPT_HOME_MODE}" == "existing" ]] || { (( OPT_NON_INTERACTIVE )) && [[ -z "${OPT_HOME_MODE}" ]]; }; then
+      die "--copy-ai-config only applies to a separate home; pass --home-mode separate or --devenv-home PATH (with --non-interactive the home mode defaults to 'existing')."
+    fi
+  fi
+
+  if [[ -n "${OPT_WRAPPER_DIR}" ]]; then
+    OPT_WRAPPER_DIR="$(resolve_wrapper_dir "${OPT_WRAPPER_DIR}")"
+  fi
 }
 
 require_cmd() {
@@ -88,11 +235,11 @@ host_pkg_query() {
 host_pkg_remove() {
   local mgr="$1" pkg="$2"
   case "${mgr}" in
-    apt) sudo apt-get remove -y "${pkg}" ;;
-    dnf) sudo dnf remove -y "${pkg}" ;;
-    zypper) sudo zypper --non-interactive remove "${pkg}" ;;
-    pacman) sudo pacman -R --noconfirm "${pkg}" ;;
-    apk) sudo apk del "${pkg}" ;;
+    apt) run_or_plan sudo apt-get remove -y "${pkg}" ;;
+    dnf) run_or_plan sudo dnf remove -y "${pkg}" ;;
+    zypper) run_or_plan sudo zypper --non-interactive remove "${pkg}" ;;
+    pacman) run_or_plan sudo pacman -R --noconfirm "${pkg}" ;;
+    apk) run_or_plan sudo apk del "${pkg}" ;;
   esac
 }
 
@@ -113,13 +260,13 @@ npm_global_pkg_installed() {
 
 npm_global_pkg_uninstall() {
   local pkg="$1"
-  if npm uninstall -g "${pkg}"; then
+  if run_or_plan npm uninstall -g "${pkg}"; then
     return 0
   fi
   if ! command -v sudo >/dev/null 2>&1; then
     return 1
   fi
-  sudo npm uninstall -g "${pkg}"
+  run_or_plan sudo npm uninstall -g "${pkg}"
 }
 
 brew_cask_candidates_for() {
@@ -164,13 +311,14 @@ claude_native_install_present() {
 }
 
 remove_claude_native_install() {
-  local bin_path="${HOST_BIN_DIR}/claude" ok=0
+  # The vendor installer always links into the default dir, not --wrapper-dir.
+  local bin_path="${DEFAULT_HOST_BIN_DIR}/claude" ok=0
   if wrapper_owns_host_bin "${bin_path}"; then
     printf 'Warning: %s looks like install.sh'"'"'s own wrapper, not the Claude Code native installer'"'"'s symlink; leaving it in place.\n' "${bin_path}" >&2
-  elif ! rm -f -- "${bin_path}"; then
+  elif ! run_or_plan rm -f -- "${bin_path}"; then
     ok=1
   fi
-  rm -rf -- "${CLAUDE_NATIVE_STATE_DIR}" || ok=1
+  run_or_plan rm -rf -- "${CLAUDE_NATIVE_STATE_DIR}" || ok=1
   return "${ok}"
 }
 
@@ -179,13 +327,14 @@ codex_native_install_present() {
 }
 
 remove_codex_native_install() {
-  local bin_path="${HOST_BIN_DIR}/codex" ok=0
+  # The vendor installer always installs into the default dir, not --wrapper-dir.
+  local bin_path="${DEFAULT_HOST_BIN_DIR}/codex" ok=0
   if wrapper_owns_host_bin "${bin_path}"; then
     printf 'Warning: %s looks like install.sh'"'"'s own wrapper, not the Codex native installer'"'"'s binary; leaving it in place.\n' "${bin_path}" >&2
-  elif ! rm -f -- "${bin_path}"; then
+  elif ! run_or_plan rm -f -- "${bin_path}"; then
     ok=1
   fi
-  rm -rf -- "${CODEX_NATIVE_STATE_DIR}" || ok=1
+  run_or_plan rm -rf -- "${CODEX_NATIVE_STATE_DIR}" || ok=1
   return "${ok}"
 }
 
@@ -242,7 +391,7 @@ cleanup_host_ai_clis() {
         [[ -z "${candidate}" ]] && continue
         if brew_cask_installed "${candidate}"; then
           printf 'Found host Homebrew cask "%s" for %s; uninstalling...\n' "${candidate}" "${cmd}"
-          if brew uninstall --cask "${candidate}"; then
+          if run_or_plan brew uninstall --cask "${candidate}"; then
             removed+=("${candidate} (brew cask)")
           else
             failed+=("${candidate} (brew cask)")
@@ -255,7 +404,7 @@ cleanup_host_ai_clis() {
         [[ -z "${candidate}" ]] && continue
         if brew_formula_installed "${candidate}"; then
           printf 'Found host Homebrew formula "%s" for %s; uninstalling...\n' "${candidate}" "${cmd}"
-          if brew uninstall "${candidate}"; then
+          if run_or_plan brew uninstall "${candidate}"; then
             removed+=("${candidate} (brew formula)")
           else
             failed+=("${candidate} (brew formula)")
@@ -293,7 +442,7 @@ cleanup_host_ai_clis() {
     gh_copilot_extension_installed || gh_status=$?
     if (( gh_status == 0 )); then
       printf 'Found deprecated gh extension "%s"; removing...\n' "${GH_COPILOT_EXTENSION}"
-      if gh extension remove "${GH_COPILOT_EXTENSION}"; then
+      if run_or_plan gh extension remove "${GH_COPILOT_EXTENSION}"; then
         removed+=("${GH_COPILOT_EXTENSION} (gh extension)")
       else
         failed+=("${GH_COPILOT_EXTENSION} (gh extension)")
@@ -315,6 +464,10 @@ cleanup_host_ai_clis() {
   failed_str="none"
   (( ${#removed[@]} > 0 )) && removed_str="$(IFS=', '; printf '%s' "${removed[*]}")"
   (( ${#failed[@]} > 0 )) && failed_str="$(IFS=', '; printf '%s' "${failed[*]}")"
+  if (( OPT_DRY_RUN )); then
+    printf 'Host cleanup (dry-run): would remove [%s].\n' "${removed_str}"
+    return 0
+  fi
   printf 'Host cleanup: removed [%s]; failed to remove [%s].\n' "${removed_str}" "${failed_str}"
 }
 
@@ -329,12 +482,21 @@ container_exists() {
   '
 }
 
+read_reply() {
+  local -n reply_ref="$1"
+  read -r -p "$2" reply_ref || [[ -n "${reply_ref}" ]] || die "${NO_INPUT_MESSAGE}"
+}
+
 prompt_yes_no() {
   local prompt="$1" default="$2" reply suffix
+  if (( OPT_NON_INTERACTIVE )); then
+    [[ "${default}" == "y" ]] && return 0
+    return 1
+  fi
   suffix="y/N"
   [[ "${default}" == "y" ]] && suffix="Y/n"
   while true; do
-    read -r -p "${prompt} [${suffix}]: " reply
+    read_reply reply "${prompt} [${suffix}]: "
     reply="${reply:-${default}}"
     case "${reply,,}" in
       y|yes) return 0 ;;
@@ -346,11 +508,15 @@ prompt_yes_no() {
 
 prompt_home_mode() {
   local name="$1" choice
+  if (( OPT_NON_INTERACTIVE )); then
+    printf 'existing\n'
+    return 0
+  fi
   printf 'Choose the home directory for the "%s" container:\n' "${name}" >&2
   printf '  1) Use the existing user home\n' >&2
   printf '  2) Create a new, separate DEVenv home\n' >&2
   while true; do
-    read -r -p "Selection [1]: " choice
+    read_reply choice "Selection [1]: "
     choice="${choice:-1}"
     case "${choice}" in
       1) printf 'existing\n'; return 0 ;;
@@ -361,32 +527,42 @@ prompt_home_mode() {
 }
 
 prompt_devenv_home_path() {
-  local path
-  read -r -p "Path for the new DEVenv home [${DEFAULT_DEVENV_HOME}]: " path
-  path="${path:-${DEFAULT_DEVENV_HOME}}"
-  path="${path/#\~/${HOME}}"
-  if [[ -z "${path}" || "${path}" == "/" || "${path}" == "${HOME}" ]]; then
-    die "refusing to use '${path}' as the DEVenv home; choose a dedicated path that is not '/' or your real home."
+  local path="${DEFAULT_DEVENV_HOME}"
+  if (( ! OPT_NON_INTERACTIVE )); then
+    read_reply path "Path for the new DEVenv home [${DEFAULT_DEVENV_HOME}]: "
+    path="${path:-${DEFAULT_DEVENV_HOME}}"
   fi
-  printf '%s\n' "${path}"
+  resolve_devenv_home "${path}"
 }
 
-copy_ai_configs() {
+plan_ai_config_copies() {
   local dest_home="$1" src source_path dest_path
+  AI_CONFIG_COPY_PLAN=()
   for src in "${AI_CONFIG_PATHS[@]}"; do
     source_path="${HOME}/${src}"
     dest_path="${dest_home}/${src}"
     [[ -e "${source_path}" ]] || continue
     if [[ -e "${dest_path}" ]]; then
-      if ! prompt_yes_no "'${dest_path}' already exists. Overwrite it from '${source_path}'?" "n"; then
+      if (( ! OPT_OVERWRITE_EXISTING )) && ! prompt_yes_no "'${dest_path}' already exists. Overwrite it from '${source_path}'?" "n"; then
         printf 'Skipping %s (already present in DEVenv home).\n' "${src}"
         continue
       fi
-      rm -rf -- "${dest_path}"
     fi
-    mkdir -p -- "$(dirname -- "${dest_path}")"
-    cp -a -- "${source_path}" "${dest_path}"
-    printf 'Copied %s\n' "${src}"
+    AI_CONFIG_COPY_PLAN+=("${src}")
+  done
+}
+
+copy_ai_configs() {
+  local dest_home="$1" src source_path dest_path
+  for src in "${AI_CONFIG_COPY_PLAN[@]}"; do
+    source_path="${HOME}/${src}"
+    dest_path="${dest_home}/${src}"
+    if [[ -e "${dest_path}" ]]; then
+      run_or_plan rm -rf -- "${dest_path}"
+    fi
+    run_or_plan mkdir -p -- "$(dirname -- "${dest_path}")"
+    run_or_plan cp -a -- "${source_path}" "${dest_path}"
+    (( OPT_DRY_RUN )) || printf 'Copied %s\n' "${src}"
   done
 }
 
@@ -397,27 +573,47 @@ create_container() {
     create_args+=(--home "${devenv_home}")
   fi
   printf 'Creating distrobox container "%s" from image "%s"...\n' "${name}" "${image}"
-  distrobox create "${create_args[@]}"
+  run_or_plan distrobox create "${create_args[@]}"
 }
 
+# A dry run never creates the container, so there is nothing to enter and
+# the bootstrap script cannot run (not even in its own --dry-run mode); the
+# command a real run would execute is printed instead.
 run_bootstrap_in_container() {
   local name="$1"
   printf 'Installing the development toolchain inside "%s"...\n' "${name}"
-  distrobox enter --name "${name}" -- bash "${BOOTSTRAP_SCRIPT}"
+  run_or_plan distrobox enter --name "${name}" -- bash "${BOOTSTRAP_SCRIPT}"
 }
 
 install_host_wrappers() {
-  local name="$1" i cmd npm_pkg wrapper_path tmp_path=""
+  local name="$1" i cmd npm_pkg wrapper_path update_block="" update_state="on"
+
+  if (( OPT_DRY_RUN )); then
+    (( OPT_AUTO_UPDATE )) || update_state="off"
+    for cmd in "${AI_CLI_WRAPPER_COMMANDS[@]}"; do
+      printf '[dry-run] would write host wrapper: %s/%s (auto-update: %s)\n' "${HOST_BIN_DIR}" "${cmd}" "${update_state}"
+    done
+    return 0
+  fi
+
   mkdir -p -- "${HOST_BIN_DIR}"
 
-  trap '[[ -n "${tmp_path}" ]] && rm -f -- "${tmp_path}"' EXIT
+  trap '[[ -z "${WRAPPER_TMP_PATH}" ]] || rm -f -- "${WRAPPER_TMP_PATH}"' EXIT
 
   for i in "${!AI_CLI_WRAPPER_COMMANDS[@]}"; do
     cmd="${AI_CLI_WRAPPER_COMMANDS[$i]}"
     npm_pkg="${AI_CLI_NPM_PACKAGES[$i]}"
     wrapper_path="${HOST_BIN_DIR}/${cmd}"
-    tmp_path="$(mktemp -- "${HOST_BIN_DIR}/.${cmd}.XXXXXX")"
-    cat > "${tmp_path}" <<WRAPPER_EOF
+    WRAPPER_TMP_PATH="$(mktemp -- "${HOST_BIN_DIR}/.${cmd}.XXXXXX")"
+    update_block=""
+    if (( OPT_AUTO_UPDATE )); then
+      IFS= read -r -d '' update_block <<UPDATE_EOF || true
+  if ! distrobox enter "${name}" -- sudo -n npm install -g ${npm_pkg}@latest; then
+    printf 'Warning: update check for ${cmd} failed (may need interactive sudo inside the container); continuing with the currently installed version.\n' >&2
+  fi
+UPDATE_EOF
+    fi
+    cat > "${WRAPPER_TMP_PATH}" <<WRAPPER_EOF
 #!/usr/bin/env bash
 # Distrobox shares the host filesystem so deeply that generic container
 # markers like /run/.containerenv and /.dockerenv don't reliably show up
@@ -435,15 +631,12 @@ if [[ "\${CONTAINER_ID:-}" == "${name}" ]]; then
   done
   PATH="\${filtered_path}" exec "${cmd}" "\$@"
 else
-  if ! distrobox enter "${name}" -- sudo -n npm install -g ${npm_pkg}@latest; then
-    printf 'Warning: update check for ${cmd} failed (may need interactive sudo inside the container); continuing with the currently installed version.\n' >&2
-  fi
-  exec distrobox enter "${name}" -- ${cmd} "\$@"
+${update_block}  exec distrobox enter "${name}" -- ${cmd} "\$@"
 fi
 WRAPPER_EOF
-    chmod +x -- "${tmp_path}"
-    mv -f -- "${tmp_path}" "${wrapper_path}"
-    tmp_path=""
+    chmod +x -- "${WRAPPER_TMP_PATH}"
+    mv -f -- "${WRAPPER_TMP_PATH}" "${wrapper_path}"
+    WRAPPER_TMP_PATH=""
     printf 'Installed host wrapper: %s\n' "${wrapper_path}"
   done
 
@@ -463,9 +656,45 @@ check_host_bin_on_path() {
 }
 
 main() {
+  parse_args "$@"
+
+  HOST_BIN_DIR="${OPT_WRAPPER_DIR:-${DEFAULT_HOST_BIN_DIR}}"
+  readonly HOST_BIN_DIR
+
+  if (( OPT_DRY_RUN )); then
+    printf '[dry-run] No changes will be made; planned actions are printed instead.\n'
+  fi
+
   check_host_prerequisites
 
-  cleanup_host_ai_clis
+  # Every interactive prompt (home mode, DEVenv home path, AI-config copy, and
+  # per-path overwrite decisions) runs before the first destructive action, so
+  # a prompt that hits end-of-input aborts while the host and the existing
+  # container are still untouched. The filesystem work for those decisions
+  # happens after the container removal below.
+  local home_mode devenv_home="" copy_ai_config="${OPT_COPY_AI_CONFIG}"
+  home_mode="${OPT_HOME_MODE:-$(prompt_home_mode "${CONTAINER_NAME}")}"
+
+  if [[ "${home_mode}" == "separate" ]]; then
+    devenv_home="${OPT_DEVENV_HOME:-$(prompt_devenv_home_path)}"
+    if [[ -z "${copy_ai_config}" ]]; then
+      copy_ai_config="no"
+      if prompt_yes_no "Copy existing Claude Code, Codex, and Copilot CLI config into the new DEVenv home?" "n"; then
+        copy_ai_config="yes"
+      fi
+    fi
+    if [[ "${copy_ai_config}" == "yes" ]]; then
+      plan_ai_config_copies "${devenv_home}"
+    fi
+  elif [[ "${copy_ai_config}" == "yes" ]]; then
+    printf 'Warning: --copy-ai-config ignored; AI config is only copied into a separate DEVenv home.\n' >&2
+  fi
+
+  if (( OPT_HOST_CLEANUP )); then
+    cleanup_host_ai_clis
+  else
+    printf 'Skipping host cleanup (--no-host-cleanup).\n'
+  fi
 
   # Always recreate rather than reuse: a reused container can silently carry
   # over a half-applied prior install or drifted packages, so install.sh
@@ -474,16 +703,12 @@ main() {
   # and the AI-config copy step below are unrelated and still run every time.
   if container_exists "${CONTAINER_NAME}"; then
     printf 'Warning: container "%s" already exists; it and everything inside it will be destroyed and recreated from scratch.\n' "${CONTAINER_NAME}" >&2
-    distrobox rm -f "${CONTAINER_NAME}"
+    run_or_plan distrobox rm -f "${CONTAINER_NAME}"
   fi
 
-  local home_mode devenv_home=""
-  home_mode="$(prompt_home_mode "${CONTAINER_NAME}")"
-
   if [[ "${home_mode}" == "separate" ]]; then
-    devenv_home="$(prompt_devenv_home_path)"
-    mkdir -p -- "${devenv_home}"
-    if prompt_yes_no "Copy existing Claude Code, Codex, and Copilot CLI config into the new DEVenv home?" "n"; then
+    run_or_plan mkdir -p -- "${devenv_home}"
+    if [[ "${copy_ai_config}" == "yes" ]]; then
       copy_ai_configs "${devenv_home}"
     fi
   fi
@@ -494,6 +719,11 @@ main() {
 
   install_host_wrappers "${CONTAINER_NAME}"
   check_host_bin_on_path
+
+  if (( OPT_DRY_RUN )); then
+    printf '\n[dry-run] Done; nothing was changed.\n'
+    return 0
+  fi
 
   printf '\nDEVenv container "%s" is ready. Enter it with: distrobox enter %s\n' "${CONTAINER_NAME}" "${CONTAINER_NAME}"
   printf 'claude, codex, and copilot are also available directly from the host terminal via %s.\n' "${HOST_BIN_DIR}"
