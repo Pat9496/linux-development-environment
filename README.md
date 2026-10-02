@@ -91,12 +91,22 @@ The bootstrap script inside the container installs the following tools and runti
 - **Version control:** git, git-lfs, SSH client, GnuPG
 - **Runtimes:** Node.js, npm, Python
 - **Build tools:** C/C++ compiler toolchain (gcc/clang and make, package name varies by distribution), Python development headers
-- **CLI utilities:** curl, jq, ripgrep, fzf, unzip, ShellCheck
+- **CLI utilities:** curl, jq, ripgrep, fzf, unzip, ShellCheck, tmux, direnv
+- **Runtime version manager:** mise (installed via official installer script to `~/.local/bin/mise` for consistency across distributions)
 - **Document handling:** pandoc, Graphviz, LibreOffice, LibreOffice Writer
 - **Repository management:** GitHub CLI (`gh`)
 - **AI assistants:** Claude Code (`@anthropic-ai/claude-code`), Codex (`@openai/codex`), Copilot CLI (`@github/copilot`)
 
 The script detects your container's package manager (apt, dnf, zypper, pacman, or apk) and uses the appropriate commands for your Linux distribution. If a package fails to install, the script logs a warning and continues, allowing the installation to complete even if a non-critical package is unavailable.
+
+**Shell activation for mise and direnv:** Both `mise` and `direnv` require shell activation hooks to work. After installation completes, the bootstrap script prints the exact activation line required for each tool. You must add these to your shell startup file (e.g. `~/.bashrc`, `~/.zshrc`, or your shell's equivalent); for example:
+
+```bash
+eval "$(mise activate bash)"
+eval "$(direnv hook bash)"
+```
+
+The installation script does not modify your shell configuration automatically—you must add these lines yourself.
 
 ## Host Wrapper Commands
 
@@ -112,7 +122,7 @@ codex list
 copilot auth login
 ```
 
-**Daily update check:** Before running your command, each wrapper checks a per-tool timestamp file under `~/.local/state/devenv/`. If more than 24 hours have passed since the last check, it runs `npm install -g <package>@latest` inside the `DEVenv` container for its own AI CLI package before continuing. This uses `sudo -n`, so it never blocks waiting for a password prompt—if no cached sudo credentials are available, it prints a warning and continues with the currently installed version. This check adds no delay on the many days it doesn't trigger, and never blocks or fails your actual command even on the day it does.
+**Update check:** Before running your command, each wrapper runs `npm install -g <package>@latest` inside the `DEVenv` container for its own AI CLI package. This check runs on every invocation. The update uses `sudo -n`, so it never blocks waiting for a password prompt—if no cached sudo credentials are available, it prints a warning and continues with the currently installed version. The update check never blocks or fails your actual command even if the update itself fails.
 
 **PATH configuration:** For the wrappers to be found from any directory, `~/.local/bin` must be on your shell's `PATH`. The installation script checks for this after creating the wrappers. If `~/.local/bin` is not on your PATH, the script prints a reminder suggesting you add it to your shell startup file. To do so, add this line to `~/.bashrc`, `~/.zshrc`, or your shell's equivalent startup file:
 

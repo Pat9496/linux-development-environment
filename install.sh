@@ -15,7 +15,6 @@ readonly CONTAINER_NAME="DEVenv"
 readonly BASE_IMAGE="registry.fedoraproject.org/fedora-toolbox:latest"
 readonly DEFAULT_DEVENV_HOME="${HOME}/DEVenv-home"
 readonly HOST_BIN_DIR="${HOME}/.local/bin"
-readonly WRAPPER_UPDATE_STATE_DIR="${HOME}/.local/state/devenv"
 readonly AI_CLI_WRAPPER_COMMANDS=(
   "claude"
   "codex"
@@ -436,18 +435,8 @@ if [[ "\${CONTAINER_ID:-}" == "${name}" ]]; then
   done
   PATH="\${filtered_path}" exec "${cmd}" "\$@"
 else
-  state_file="${WRAPPER_UPDATE_STATE_DIR}/${cmd}"
-  now_ts="\$(date +%s)"
-  last_ts=0
-  if [[ -f "\${state_file}" ]]; then
-    last_ts="\$(cat -- "\${state_file}" 2>/dev/null || printf '0')"
-  fi
-  if (( now_ts - last_ts >= 86400 )); then
-    mkdir -p -- "${WRAPPER_UPDATE_STATE_DIR}" 2>/dev/null
-    if ! distrobox enter "${name}" -- sudo -n npm install -g ${npm_pkg}@latest; then
-      printf 'Warning: daily update check for ${cmd} failed (may need interactive sudo inside the container); continuing with the currently installed version.\n' >&2
-    fi
-    printf '%s' "\${now_ts}" > "\${state_file}" 2>/dev/null
+  if ! distrobox enter "${name}" -- sudo -n npm install -g ${npm_pkg}@latest; then
+    printf 'Warning: update check for ${cmd} failed (may need interactive sudo inside the container); continuing with the currently installed version.\n' >&2
   fi
   exec distrobox enter "${name}" -- ${cmd} "\$@"
 fi

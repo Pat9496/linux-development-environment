@@ -91,12 +91,22 @@ Das Bootstrap-Skript innerhalb des Containers installiert die folgenden Tools un
 - **Versionskontrolle:** git, git-lfs, SSH-Client, GnuPG
 - **Laufzeitumgebungen:** Node.js, npm, Python
 - **Build-Tools:** C/C++-Compiler-Toolchain (gcc/clang und make, Paketname variiert je nach Distribution), Python-Entwicklungsheader
-- **CLI-Utilities:** curl, jq, ripgrep, fzf, unzip, ShellCheck
+- **CLI-Utilities:** curl, jq, ripgrep, fzf, unzip, ShellCheck, tmux, direnv
+- **Runtime-Versionsverwaltung:** mise (installiert über das offizielle Installationsskript zu `~/.local/bin/mise` für Konsistenz über Distributionen hinweg)
 - **Dokumentenverarbeitung:** pandoc, Graphviz, LibreOffice, LibreOffice Writer
 - **Repository-Verwaltung:** GitHub CLI (`gh`)
 - **AI-Assistenten:** Claude Code (`@anthropic-ai/claude-code`), Codex (`@openai/codex`), Copilot CLI (`@github/copilot`)
 
 Das Skript erkennt den Package Manager des Containers (apt, dnf, zypper, pacman oder apk) und verwendet die entsprechenden Befehle für die Linux-Distribution. Falls ein Paket nicht installiert werden kann, protokolliert das Skript eine Warnung und setzt die Installation fort, wodurch der Installationsvorgang selbst dann abgeschlossen werden kann, wenn ein nicht kritisches Paket nicht verfügbar ist.
+
+**Shell-Aktivierung für mise und direnv:** Sowohl `mise` als auch `direnv` erfordern Shell-Aktivierungshooks, um zu funktionieren. Nach Abschluss der Installation gibt das Bootstrap-Skript die exakte Aktivierungszeile für jedes Tool aus. Diese Zeilen müssen der Shell-Startdatei hinzugefügt werden (z.B. `~/.bashrc`, `~/.zshrc` oder die Entsprechung für die verwendete Shell); zum Beispiel:
+
+```bash
+eval "$(mise activate bash)"
+eval "$(direnv hook bash)"
+```
+
+Das Installationsskript modifiziert die Shell-Konfiguration nicht automatisch – diese Zeilen müssen manuell hinzugefügt werden.
 
 ## Host-Wrapper-Befehle
 
@@ -112,7 +122,7 @@ codex list
 copilot auth login
 ```
 
-**Tägliche Update-Prüfung:** Vor der Ausführung des Befehls überprüft jeder Wrapper eine zeitgestempelte Datei pro Tool unter `~/.local/state/devenv/`. Falls mehr als 24 Stunden seit der letzten Prüfung vergangen sind, führt er `npm install -g <package>@latest` innerhalb des `DEVenv`-Containers für sein eigenes AI-CLI-Paket aus, bevor der Befehl fortgesetzt wird. Dies nutzt `sudo -n`, sodass der Wrapper niemals auf eine Passwortaufforderung wartet — sind keine zwischengespeicherten sudo-Anmeldedaten verfügbar, gibt er eine Warnung aus und setzt die Nutzung der aktuell installierten Version fort. Diese Prüfung verursacht an den vielen Tagen, an denen sie nicht ausgelöst wird, keine Verzögerung und blockiert oder beschädigt den tatsächlichen Befehl nicht, auch nicht an dem Tag, an dem sie ausgelöst wird.
+**Update-Prüfung:** Vor der Ausführung des Befehls führt jeder Wrapper `npm install -g <package>@latest` innerhalb des `DEVenv`-Containers für sein eigenes AI-CLI-Paket aus. Diese Prüfung wird bei jedem Aufruf ausgeführt. Das Update nutzt `sudo -n`, sodass der Wrapper niemals auf eine Passwortaufforderung wartet – sind keine zwischengespeicherten sudo-Anmeldedaten verfügbar, gibt er eine Warnung aus und setzt die Nutzung der aktuell installierten Version fort. Die Update-Prüfung blockiert oder beschädigt den tatsächlichen Befehl nicht, auch nicht wenn das Update selbst fehlschlägt.
 
 **PATH-Konfiguration:** Damit die Wrapper von jedem Verzeichnis aus gefunden werden, muss `~/.local/bin` in der PATH-Variable der Shell enthalten sein. Das Installationsskript überprüft dies nach der Erstellung der Wrapper. Falls `~/.local/bin` nicht in PATH enthalten ist, gibt das Skript eine Erinnerung aus, die vorschlägt, es in die Shell-Startdatei hinzuzufügen. Hierzu ist folgende Zeile in `~/.bashrc`, `~/.zshrc` oder in der entsprechenden Startdatei der Shell einzufügen:
 
