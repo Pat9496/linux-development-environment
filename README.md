@@ -147,8 +147,18 @@ The bootstrap script inside the container installs the following tools and runti
 - **CLI utilities:** curl, jq, ripgrep, fzf, unzip, ShellCheck, tmux, direnv
 - **Runtime version manager:** mise (installed via official installer script to `~/.local/bin/mise` for consistency across distributions)
 - **Document handling:** pandoc, Graphviz, LibreOffice, LibreOffice Writer
+- **PDF and OCR tools:** Poppler utilities, qpdf, Ghostscript, Tesseract OCR with English and German language data, ocrmypdf (not available on openSUSE)
+- **LaTeX for PDF output:** a minimal XeLaTeX stack (XeLaTeX, LaTeX and font recommended collections) so pandoc can produce PDF files; Typst is installed as an alternative PDF engine where the distribution packages it (not on apt-based systems)
+- **Python document libraries:** openpyxl, pandas, tabulate, pdfplumber, pymupdf, pypdf, python-docx, pymupdf4llm, markitdown (installed into a dedicated virtual environment, see below)
 - **Repository management:** GitHub CLI (`gh`)
 - **AI assistants:** Claude Code (`@anthropic-ai/claude-code`), Codex (`@openai/codex`), Copilot CLI (`@github/copilot`)
+- **PowerShell (optional):** `pwsh`, from the latest PowerShell release on GitHub
+- **draw.io desktop (optional):** `drawio`, from the latest draw.io desktop release on GitHub, run under `xvfb-run` for headless use
+- **Azure CLI (optional):** `az`, installed with pip into its own virtual environment
+- **Headless display:** Xvfb and xauth, used by the `drawio` wrapper
+- **Electron libraries:** GTK 3, NSS, GBM, and ALSA libraries, used by the draw.io desktop AppImage
+- **Runtime library:** ICU
+- **Fonts:** Carlito and Liberation fonts
 
 The script detects your container's package manager (apt, dnf, zypper, pacman, or apk) and uses the appropriate commands for your Linux distribution. If a package fails to install, the script logs a warning and continues, allowing the installation to complete even if a non-critical package is unavailable.
 
@@ -160,6 +170,30 @@ eval "$(direnv hook bash)"
 ```
 
 The installation script does not modify your shell configuration automatically—you must add these lines yourself.
+
+**Document conversion libraries:** The bootstrap script creates a Python virtual environment at `~/.local/share/devenv/doc-tools` and installs the Python libraries listed above into it. This step is optional. If it fails, the script logs a warning, continues, and lists the failure in its final summary. The script does not add this environment to your shell startup file. To run a script that needs these libraries, call the interpreter directly:
+
+```bash
+~/.local/share/devenv/doc-tools/bin/python your-script.py
+```
+
+LibreOffice runs in headless mode and can convert XLSX, CSV, and DOCX files to PDF. Package names for the PDF, OCR, and LaTeX tools differ between distributions; the script selects the names for the detected package manager.
+
+**Optional tools:** The script installs PowerShell, draw.io desktop, and Azure CLI. Each installation is optional. If one fails, the script logs a warning, continues, and lists the failure in its final summary. When any of these tools is installed, the script prints a note reminding you that `~/.local/bin` must be on your `PATH`. See [Host Wrapper Commands](#host-wrapper-commands) for the PATH line.
+
+**PowerShell:** The script extracts the PowerShell release archive to `~/.local/share/devenv/powershell` and links `~/.local/bin/pwsh` to it. On Alpine, PowerShell is installed only on x86_64.
+
+**draw.io desktop:** The script extracts the AppImage to `~/.local/share/devenv/drawio` instead of running it, because containers usually lack FUSE. The `drawio` command in `~/.local/bin` runs the extracted application under `xvfb-run`. Use it for command-line export, for example:
+
+```bash
+drawio -x -f pdf -o out.pdf in.drawio
+```
+
+The draw.io install does not run on Alpine, because the AppImage needs glibc. The draw.io install fails with an error if `xvfb-run` is not found.
+
+**Azure CLI:** The script installs `az` with pip into a virtual environment at `~/.local/share/devenv/azure-cli`. `~/.local/bin/az` links to it.
+
+**Checksums:** The PowerShell and draw.io downloads are checked against the sha256 digest that GitHub publishes for each release asset. The install is refused if the digest is missing or does not match.
 
 ## Host Wrapper Commands
 
@@ -216,4 +250,9 @@ DEVenv builds on and depends on the following upstream projects:
 - **Fedora Toolbox** — Base container image (`registry.fedoraproject.org/fedora-toolbox:latest`)
 - **Codex** — AI assistant
 - **Copilot CLI** — AI assistant
+- **PowerShell** — Optional shell and scripting runtime
+- **draw.io desktop** — Optional headless diagram export
+- **Azure CLI** — Optional Azure command-line client
+- **mise** — Polyglot runtime version manager
+- **Typst** — Alternative PDF engine for pandoc
 

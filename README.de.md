@@ -146,9 +146,13 @@ Das Bootstrap-Skript innerhalb des Containers installiert die folgenden Tools un
 - **Build-Tools:** C/C++-Compiler-Toolchain (gcc/clang und make, Paketname variiert je nach Distribution), Python-Entwicklungsheader
 - **CLI-Utilities:** curl, jq, ripgrep, fzf, unzip, ShellCheck, tmux, direnv
 - **Runtime-Versionsverwaltung:** mise (installiert über das offizielle Installationsskript zu `~/.local/bin/mise` für Konsistenz über Distributionen hinweg)
-- **Dokumentenverarbeitung:** pandoc, Graphviz, LibreOffice, LibreOffice Writer
+- **Dokumentenverarbeitung:** pandoc, Graphviz, LibreOffice, LibreOffice Writer. LibreOffice läuft headless und konvertiert XLSX-, CSV- und DOCX-Dateien nach PDF. Zusätzlich werden die Schriften Carlito und Liberation installiert.
+- **PDF- und OCR-Werkzeuge:** poppler (PDF-Hilfsprogramme, Paketname variiert je nach Distribution), qpdf, Ghostscript, Tesseract OCR mit den Sprachdaten für Englisch und Deutsch (`eng`, `deu`), ocrmypdf. Auf openSUSE wird ocrmypdf nicht installiert, da das Paket dort nicht im Paketsatz enthalten ist.
+- **LaTeX-Stack für PDF-Ausgaben mit pandoc:** minimaler XeLaTeX-Stack (XeTeX sowie die LaTeX- und Schriften-Empfehlungspakete), damit pandoc PDF-Dateien erzeugen kann. Zusätzlich wird Typst als alternative PDF-Engine installiert, sofern die Distribution es paketiert (nicht auf apt-basierten Systemen).
+- **Headless-Ausführung für draw.io:** Xvfb (`xvfb-run`), xauth sowie die Laufzeitbibliotheken für Electron (GTK 3, NSS, GBM, ALSA) und ICU. Die Paketnamen variieren je nach Distribution.
 - **Repository-Verwaltung:** GitHub CLI (`gh`)
 - **AI-Assistenten:** Claude Code (`@anthropic-ai/claude-code`), Codex (`@openai/codex`), Copilot CLI (`@github/copilot`)
+- **Optionale Werkzeuge:** PowerShell (`pwsh`), draw.io Desktop (`drawio`) und Azure CLI (`az`). Details weiter unten.
 
 Das Skript erkennt den Package Manager des Containers (apt, dnf, zypper, pacman oder apk) und verwendet die entsprechenden Befehle für die Linux-Distribution. Falls ein Paket nicht installiert werden kann, protokolliert das Skript eine Warnung und setzt die Installation fort, wodurch der Installationsvorgang selbst dann abgeschlossen werden kann, wenn ein nicht kritisches Paket nicht verfügbar ist.
 
@@ -160,6 +164,16 @@ eval "$(direnv hook bash)"
 ```
 
 Das Installationsskript modifiziert die Shell-Konfiguration nicht automatisch – diese Zeilen müssen manuell hinzugefügt werden.
+
+**Python-Bibliotheken für die Dokumentenkonvertierung:** Die Bibliotheken `openpyxl`, `pandas`, `tabulate`, `pdfplumber`, `pymupdf`, `pypdf`, `python-docx`, `pymupdf4llm` und `markitdown` werden per pip in eine eigene Python-venv unter `~/.local/share/devenv/doc-tools` installiert, nicht in die System-Python-Installation. Grund: apt, pacman und apk kennzeichnen das System-Python als extern verwaltet (PEP 668). Skripte, die diese Bibliotheken benötigen, werden mit `~/.local/share/devenv/doc-tools/bin/python` ausgeführt. Die Einrichtung dieser venv ist ein optionaler Schritt. Schlägt sie fehl, gibt das Bootstrap-Skript eine Warnung aus und setzt die restliche Installation fort.
+
+**Optionale Werkzeuge mit eigenem Installationsweg:** PowerShell, draw.io Desktop und Azure CLI werden nicht über den Package Manager installiert:
+
+- **PowerShell (`pwsh`):** Das aktuelle Release des Projekts PowerShell/PowerShell wird von GitHub geladen und nach `~/.local/share/devenv/powershell` entpackt. Ein Link liegt in `~/.local/bin/pwsh`. Für Alpine steht nur das x86_64-Build mit musl zur Verfügung.
+- **draw.io Desktop (`drawio`):** Das aktuelle AppImage des Projekts jgraph/drawio-desktop wird von GitHub geladen und nach `~/.local/share/devenv/drawio` entpackt, da Container in der Regel kein FUSE bereitstellen. Das Wrapper-Skript `~/.local/bin/drawio` führt die Anwendung über `xvfb-run` ohne Bildschirm und mit `--no-sandbox` aus. Ein Headless-Export ist beispielsweise mit `drawio -x -f pdf -o out.pdf in.drawio` möglich. Auf Alpine ist draw.io Desktop nicht verfügbar, da das AppImage glibc benötigt.
+- **Azure CLI (`az`):** Das Paket `azure-cli` wird per pip in eine eigene venv unter `~/.local/share/devenv/azure-cli` installiert. Ein Link liegt in `~/.local/bin/az`.
+
+Die Downloads von PowerShell und draw.io werden gegen den sha256-Digest geprüft, den GitHub für das jeweilige Release-Asset veröffentlicht. Fehlt der Digest oder stimmt er nicht überein, wird die Installation abgebrochen. Schlägt eine der drei Installationen fehl, gibt das Bootstrap-Skript eine Warnung aus und setzt die restliche Installation fort. Die Befehle `pwsh`, `drawio` und `az` liegen in `~/.local/bin`; dieses Verzeichnis muss im PATH der Shell enthalten sein.
 
 ## Host-Wrapper-Befehle
 
@@ -216,3 +230,8 @@ DEVenv baut auf und ist abhängig von den folgenden vorgelagerten Projekten:
 - **Fedora Toolbox** — Container-Basis-Image (`registry.fedoraproject.org/fedora-toolbox:latest`)
 - **Codex** — KI-Assistent
 - **Copilot CLI** — KI-Assistent
+- **PowerShell** — Optionale Shell- und Skript-Laufzeitumgebung
+- **draw.io desktop** — Optionaler Headless-Export von Diagrammen
+- **Azure CLI** — Optionaler Azure-Kommandozeilenclient
+- **mise** — Versionsmanager für Laufzeitumgebungen verschiedener Sprachen
+- **Typst** — Alternative PDF-Engine für pandoc
