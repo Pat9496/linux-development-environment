@@ -90,16 +90,22 @@ usage() {
   printf '      --dry-run                 Print planned actions, change nothing\n'
   printf '  -h, --help                    Show this help and exit\n\n'
   printf 'Options accept both "--option value" and "--option=value"; "--" ends option parsing.\n'
-  printf 'Without -y, a prompt that reads end-of-input (e.g. "curl ... | bash") is an error.\n'
+  printf 'Without -y, a prompt that reads end-of-input (e.g. stdin redirected from /dev/null) is an error.\n'
 }
 
 resolve_devenv_home() {
   local path="$1"
-  path="${path/#\~/${HOME}}"
+  if [[ "${path}" == \~ || "${path}" == \~/* ]]; then
+    path="${HOME}${path:1}"
+  fi
   while [[ "${path}" == */ && "${path}" != "/" ]]; do
     path="${path%/}"
   done
-  if [[ -z "${path}" || "${path}" == "/" || "${path}" == "${HOME}" ]]; then
+  [[ "${path}" == /* ]] || die "the DEVenv home must be an absolute path or start with '~/' (got '${path}')."
+  if [[ "${path}/" == */./* || "${path}/" == */../* ]]; then
+    die "the DEVenv home must not contain '.' or '..' path components (got '${path}')."
+  fi
+  if [[ "${path}" == "/" || "${path}" == "${HOME}" || "${path}" -ef / || "${path}" -ef "${HOME}" ]]; then
     die "refusing to use '${path}' as the DEVenv home; choose a dedicated path that is not '/' or your real home."
   fi
   printf '%s\n' "${path}"
@@ -107,7 +113,9 @@ resolve_devenv_home() {
 
 resolve_wrapper_dir() {
   local path="$1"
-  path="${path/#\~/${HOME}}"
+  if [[ "${path}" == \~ || "${path}" == \~/* ]]; then
+    path="${HOME}${path:1}"
+  fi
   while [[ "${path}" == */ && "${path}" != "/" ]]; do
     path="${path%/}"
   done
@@ -198,6 +206,9 @@ require_cmd() {
 }
 
 check_host_prerequisites() {
+  if [[ -n "${CONTAINER_ID:-}" || -e /run/.containerenv || -e /.dockerenv ]]; then
+    die "install.sh must run on the host, not inside a container; it removes host installs and recreates the \"${CONTAINER_NAME}\" container."
+  fi
   require_cmd distrobox
   if ! command -v podman >/dev/null 2>&1 && ! command -v docker >/dev/null 2>&1; then
     die "neither podman nor docker found on host. Distrobox needs one of them."
@@ -462,8 +473,14 @@ cleanup_host_ai_clis() {
 
   removed_str="none"
   failed_str="none"
-  (( ${#removed[@]} > 0 )) && removed_str="$(IFS=', '; printf '%s' "${removed[*]}")"
-  (( ${#failed[@]} > 0 )) && failed_str="$(IFS=', '; printf '%s' "${failed[*]}")"
+  if (( ${#removed[@]} > 0 )); then
+    printf -v removed_str '%s, ' "${removed[@]}"
+    removed_str="${removed_str%, }"
+  fi
+  if (( ${#failed[@]} > 0 )); then
+    printf -v failed_str '%s, ' "${failed[@]}"
+    failed_str="${failed_str%, }"
+  fi
   if (( OPT_DRY_RUN )); then
     printf 'Host cleanup (dry-run): would remove [%s].\n' "${removed_str}"
     return 0
@@ -557,6 +574,10 @@ copy_ai_configs() {
   for src in "${AI_CONFIG_COPY_PLAN[@]}"; do
     source_path="${HOME}/${src}"
     dest_path="${dest_home}/${src}"
+    if [[ "${source_path}" -ef "${dest_path}" ]]; then
+      printf 'Warning: %s is the same file as %s; skipping %s.\n' "${dest_path}" "${source_path}" "${src}" >&2
+      continue
+    fi
     if [[ -e "${dest_path}" ]]; then
       run_or_plan rm -rf -- "${dest_path}"
     fi
@@ -608,7 +629,7 @@ install_host_wrappers() {
     update_block=""
     if (( OPT_AUTO_UPDATE )); then
       IFS= read -r -d '' update_block <<UPDATE_EOF || true
-  if ! distrobox enter "${name}" -- sudo -n npm install -g ${npm_pkg}@latest; then
+  if ! distrobox enter "${name}" -- sudo -n npm install -g ${npm_pkg}@latest </dev/null >&2; then
     printf 'Warning: update check for ${cmd} failed (may need interactive sudo inside the container); continuing with the currently installed version.\n' >&2
   fi
 UPDATE_EOF
@@ -625,7 +646,7 @@ if [[ "\${CONTAINER_ID:-}" == "${name}" ]]; then
   IFS=':' read -r -a path_parts <<< "\${PATH}"
   filtered_path=""
   for path_part in "\${path_parts[@]}"; do
-    if [[ "\${path_part}" != "${HOST_BIN_DIR}" ]]; then
+    if [[ "\${path_part}" != "${HOST_BIN_DIR}" && ! "\${path_part}" -ef "${HOST_BIN_DIR}" ]]; then
       filtered_path="\${filtered_path:+\${filtered_path}:}\${path_part}"
     fi
   done

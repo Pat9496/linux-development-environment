@@ -35,6 +35,7 @@ On the host system, you must have:
 - A Linux system (any distribution)
 - `distrobox` installed
 - Either `podman` or `docker` available as the container runtime
+- Bash 4.3 or newer (`install.sh` uses `local -n`)
 
 The installation script itself is self-contained and will set up everything else inside the container.
 
@@ -52,6 +53,8 @@ cd DEVenv
 
 The script will check for `distrobox` and `podman`/`docker` on the host, then guide you through the setup process. The container is always created with the fixed name `DEVenv` using the `registry.fedoraproject.org/fedora-toolbox:latest` image.
 
+Run `install.sh` on the host, not inside a container. The script stops with an error if it detects a container: when `CONTAINER_ID` is set, or when `/run/.containerenv` or `/.dockerenv` exists. This check also applies with `--dry-run`. The `--help` option works in any environment.
+
 ### Installation Prompts
 
 During installation, you will be prompted for the following:
@@ -67,15 +70,15 @@ Both `install.sh` and `distrobox-bootstrap.sh` accept command-line options to sk
 
 **install.sh Options**
 
-- `-y, --non-interactive` — Never prompt. Use the defaults listed below or exit with an error. Without this flag, a prompt that reads end-of-input (for example, `curl ... | bash`) is treated as an error instead of silently using a default. Pass explicit flags or use `-y` to run unattended.
+- `-y, --non-interactive` — Never prompt. Use the defaults listed below or exit with an error. Without this flag, a prompt that reads end-of-input (for example, when stdin is redirected from `/dev/null`) is treated as an error instead of silently using a default. Pass explicit flags or use `-y` to run unattended.
 - `--home-mode existing|separate` — Set the home directory mode. Default when non-interactive: `existing`.
-- `--devenv-home PATH` — Path for the separate DEVenv home directory. Implies `--home-mode separate`. Accepts absolute paths or tilde-prefixed paths; defaults to `~/DEVenv-home` when non-interactive.
+- `--devenv-home PATH` — Path for the separate DEVenv home directory. Implies `--home-mode separate`. The path must be absolute or start with `~/`. Forms such as `~user/...` are rejected, and so are paths that contain `.` or `..` components. The script refuses `/` and your real home directory, including paths that resolve to them through a symlink or another spelling (for example, a `/var/home/` path on Atomic hosts). Defaults to `~/DEVenv-home` when non-interactive.
 - `--copy-ai-config` — Copy existing Claude Code, Codex, and Copilot CLI configuration from the host into the new DEVenv home (only applies to separate home mode).
 - `--no-copy-ai-config` — Do not copy AI configuration. This is the default when non-interactive.
 - `--overwrite-existing-config` — Overwrite AI config paths already present in the DEVenv home without prompting. By default, the script asks before overwriting.
 - `--no-host-cleanup` — Skip the removal of any host-side installs of claude, codex, or copilot.
 - `--no-auto-update` — Generate wrapper scripts that skip the per-invocation npm update check. By default, the wrappers check for updates every time you run `claude`, `codex`, or `copilot` from the host.
-- `--wrapper-dir DIR` — Install the host wrapper scripts to a different directory instead of `~/.local/bin`. Must be an absolute path.
+- `--wrapper-dir DIR` — Install the host wrapper scripts to a different directory instead of `~/.local/bin`. Must be an absolute path or start with `~/`.
 - `--dry-run` — Print the planned actions and exit without making any changes.
 - `-h, --help` — Show usage information and exit.
 
@@ -147,8 +150,8 @@ The bootstrap script inside the container installs the following tools and runti
 - **CLI utilities:** curl, jq, ripgrep, fzf, unzip, ShellCheck, tmux, direnv
 - **Runtime version manager:** mise (installed via official installer script to `~/.local/bin/mise` for consistency across distributions)
 - **Document handling:** pandoc, Graphviz, LibreOffice, LibreOffice Writer
-- **PDF and OCR tools:** Poppler utilities, qpdf, Ghostscript, Tesseract OCR with English and German language data, ocrmypdf (not available on openSUSE)
-- **LaTeX for PDF output:** a minimal XeLaTeX stack (XeLaTeX, LaTeX and font recommended collections) so pandoc can produce PDF files; Typst is installed as an alternative PDF engine where the distribution packages it (not on apt-based systems)
+- **PDF and OCR tools:** Poppler utilities, qpdf, Ghostscript, Tesseract OCR with English and German language data, ocrmypdf (not available on openSUSE or Arch Linux)
+- **LaTeX for PDF output:** a minimal XeLaTeX stack (XeLaTeX, LaTeX and font recommended collections) so pandoc can produce PDF files; Typst is installed as an alternative PDF engine on openSUSE, Arch Linux, and Alpine only. It is not installed on apt-based systems or on Fedora, so it is not part of the default image
 - **Python document libraries:** openpyxl, pandas, tabulate, pdfplumber, pymupdf, pypdf, python-docx, pymupdf4llm, markitdown (installed into a dedicated virtual environment, see below)
 - **Repository management:** GitHub CLI (`gh`)
 - **AI assistants:** Claude Code (`@anthropic-ai/claude-code`), Codex (`@openai/codex`), Copilot CLI (`@github/copilot`)
@@ -160,7 +163,7 @@ The bootstrap script inside the container installs the following tools and runti
 - **Runtime library:** ICU
 - **Fonts:** Carlito and Liberation fonts
 
-The script detects your container's package manager (apt, dnf, zypper, pacman, or apk) and uses the appropriate commands for your Linux distribution. If a package fails to install, the script logs a warning and continues, allowing the installation to complete even if a non-critical package is unavailable.
+The script detects your container's package manager (apt, dnf, zypper, pacman, or apk) and uses the appropriate commands for your Linux distribution. The script first tries to install all packages in one package-manager transaction. If that transaction fails, it installs the packages one at a time. Each package that still fails is logged with a warning, and the script continues. The final summary lists the packages that could not be installed.
 
 **Shell activation for mise and direnv:** Both `mise` and `direnv` require shell activation hooks to work. After installation completes, the bootstrap script prints the exact activation line required for each tool. You must add these to your shell startup file (e.g. `~/.bashrc`, `~/.zshrc`, or your shell's equivalent); for example:
 
@@ -179,11 +182,11 @@ The installation script does not modify your shell configuration automatically�
 
 LibreOffice runs in headless mode and can convert XLSX, CSV, and DOCX files to PDF. Package names for the PDF, OCR, and LaTeX tools differ between distributions; the script selects the names for the detected package manager.
 
-**Optional tools:** The script installs PowerShell, draw.io desktop, and Azure CLI. Each installation is optional. If one fails, the script logs a warning, continues, and lists the failure in its final summary. When any of these tools is installed, the script prints a note reminding you that `~/.local/bin` must be on your `PATH`. See [Host Wrapper Commands](#host-wrapper-commands) for the PATH line.
+**Optional tools:** The script installs PowerShell, draw.io desktop, and Azure CLI. Each installation is optional. If one fails, the script logs a warning, continues, and lists the failure in its final summary. The commands `pwsh`, `drawio`, and `az` are created in `/usr/local/bin` inside the container, which is on the container's `PATH`. Their program files stay in `~/.local/share/devenv/`. These commands are not installed on the host.
 
-**PowerShell:** The script extracts the PowerShell release archive to `~/.local/share/devenv/powershell` and links `~/.local/bin/pwsh` to it. On Alpine, PowerShell is installed only on x86_64.
+**PowerShell:** The script extracts the PowerShell release archive to `~/.local/share/devenv/powershell`. It links `/usr/local/bin/pwsh` in the container to the `pwsh` binary in that directory. On Alpine, PowerShell is installed only on x86_64.
 
-**draw.io desktop:** The script extracts the AppImage to `~/.local/share/devenv/drawio` instead of running it, because containers usually lack FUSE. The `drawio` command in `~/.local/bin` runs the extracted application under `xvfb-run`. Use it for command-line export, for example:
+**draw.io desktop:** The script extracts the AppImage to `~/.local/share/devenv/drawio` instead of running it, because containers usually lack FUSE. The `drawio` command in `/usr/local/bin` runs the extracted application under `xvfb-run`. Use it for command-line export, for example:
 
 ```bash
 drawio -x -f pdf -o out.pdf in.drawio
@@ -191,7 +194,7 @@ drawio -x -f pdf -o out.pdf in.drawio
 
 The draw.io install does not run on Alpine, because the AppImage needs glibc. The draw.io install fails with an error if `xvfb-run` is not found.
 
-**Azure CLI:** The script installs `az` with pip into a virtual environment at `~/.local/share/devenv/azure-cli`. `~/.local/bin/az` links to it.
+**Azure CLI:** The script installs `az` with pip into a virtual environment at `~/.local/share/devenv/azure-cli`. `/usr/local/bin/az` links to it.
 
 **Checksums:** The PowerShell and draw.io downloads are checked against the sha256 digest that GitHub publishes for each release asset. The install is refused if the digest is missing or does not match.
 
@@ -199,7 +202,7 @@ The draw.io install does not run on Alpine, because the AppImage needs glibc. Th
 
 After installation, three wrapper scripts are installed in `~/.local/bin`: `claude`, `codex`, and `copilot`. These let you run the AI CLI tools directly from your host terminal without entering the container.
 
-**Design:** DEVenv uses a no-export design—everything installed inside the container stays container-only. No distrobox-export calls are made, and no host .desktop entries or exported binaries are created for any container package. The only host-side artifacts created are these three thin wrapper scripts for the AI CLIs.
+**Design:** DEVenv uses a no-export design—everything installed inside the container stays container-only. No distrobox-export calls are made, and no host .desktop entries or exported binaries are created for any container package. Apart from the DEVenv home directory in separate home mode, the only host-side artifacts created are these three thin wrapper scripts for the AI CLIs.
 
 **How they work:** Each wrapper runs the command inside the DEVenv container via `distrobox enter "DEVenv" -- <command> "$@"`. You can invoke them from the host terminal:
 
@@ -209,7 +212,7 @@ codex list
 copilot auth login
 ```
 
-**Update check:** Before running your command, each wrapper runs `npm install -g <package>@latest` inside the `DEVenv` container for its own AI CLI package. This check runs on every invocation. The update uses `sudo -n`, so it never blocks waiting for a password prompt—if no cached sudo credentials are available, it prints a warning and continues with the currently installed version. The update check never blocks or fails your actual command even if the update itself fails.
+**Update check:** Before running your command, each wrapper runs `npm install -g <package>@latest` inside the `DEVenv` container for its own AI CLI package. This check runs on every invocation. The update uses `sudo -n`, so it never blocks waiting for a password prompt—if no cached sudo credentials are available, it prints a warning and continues with the currently installed version. The update check never blocks or fails your actual command even if the update itself fails. The update check writes its output to stderr. It never reads from stdin, because its stdin is redirected from `/dev/null`.
 
 **PATH configuration:** For the wrappers to be found from any directory, `~/.local/bin` must be on your shell's `PATH`. The installation script checks for this after creating the wrappers. If `~/.local/bin` is not on your PATH, the script prints a reminder suggesting you add it to your shell startup file. To do so, add this line to `~/.bashrc`, `~/.zshrc`, or your shell's equivalent startup file:
 
@@ -254,5 +257,5 @@ DEVenv builds on and depends on the following upstream projects:
 - **draw.io desktop** — Optional headless diagram export
 - **Azure CLI** — Optional Azure command-line client
 - **mise** — Polyglot runtime version manager
-- **Typst** — Alternative PDF engine for pandoc
+- **Typst** — Alternative PDF engine for pandoc (installed on openSUSE, Arch Linux, and Alpine only)
 

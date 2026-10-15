@@ -35,8 +35,9 @@ Auf dem Host-System müssen folgende Komponenten vorhanden sein:
 - Ein Linux-System (jede Distribution)
 - `distrobox` installiert
 - Entweder `podman` oder `docker` als Container-Runtime verfügbar
+- Bash ab Version 4.3 (`install.sh` verwendet `local -n`)
 
-Das Installationsskript selbst ist eigenständig und richtet alles weitere innerhalb des Containers ein.
+Das Installationsskript selbst ist eigenständig und richtet alles weitere innerhalb des Containers ein. Es wird auf dem Host ausgeführt; `install.sh` bricht ab, wenn es innerhalb eines Containers läuft. Erkannt wird dies an der gesetzten Umgebungsvariable `CONTAINER_ID` oder an den Dateien `/run/.containerenv` und `/.dockerenv`. Der Abbruch gilt auch mit `--dry-run`. `-h, --help` gibt die Nutzungsinformationen dagegen auch innerhalb eines Containers aus.
 
 ## Erste Schritte
 
@@ -67,9 +68,9 @@ Sowohl `install.sh` als auch `distrobox-bootstrap.sh` akzeptieren Befehlszeileno
 
 **install.sh-Optionen**
 
-- `-y, --non-interactive` — Keine Eingabeaufforderungen. Die unten aufgeführten Standardwerte verwenden oder mit einem Fehler beenden. Ohne dieses Flag wird eine Eingabeaufforderung, die das Ende der Eingabe liest (beispielsweise `curl ... | bash`), als Fehler behandelt, anstatt stillschweigend einen Standardwert zu verwenden. Zur unbeaufsichtigten Ausführung explizite Flags übergeben oder `-y` verwenden.
+- `-y, --non-interactive` — Keine Eingabeaufforderungen. Die unten aufgeführten Standardwerte verwenden oder mit einem Fehler beenden. Ohne dieses Flag wird eine Eingabeaufforderung, die das Ende der Eingabe erreicht (beispielsweise bei einer Standardeingabe, die von `/dev/null` umgeleitet ist), als Fehler behandelt, anstatt stillschweigend einen Standardwert zu verwenden. Zur unbeaufsichtigten Ausführung explizite Flags übergeben oder `-y` verwenden.
 - `--home-mode existing|separate` — Den Home-Verzeichnis-Modus setzen. Standardwert bei unbeaufsichtigt: `existing`.
-- `--devenv-home PATH` — Pfad für das separate DEVenv-Home-Verzeichnis. Impliziert `--home-mode separate`. Akzeptiert absolute Pfade oder mit Tilde präfixierte Pfade; Standard bei unbeaufsichtigt: `~/DEVenv-home`.
+- `--devenv-home PATH` — Pfad für das separate DEVenv-Home-Verzeichnis. Impliziert `--home-mode separate`. Der Pfad muss absolut sein oder mit `~/` beginnen. Formen wie `~user` werden abgelehnt, ebenso Pfade mit `.`- oder `..`-Komponenten. `/` und das eigene Home-Verzeichnis werden abgelehnt, auch wenn sie über einen symbolischen Link oder eine andere Schreibweise angegeben werden (beispielsweise über einen Pfad unter `/var/home` auf Atomic-Hosts). Dieselben Regeln gelten für die interaktive Abfrage des Pfads. Standard bei unbeaufsichtigt: `~/DEVenv-home`.
 - `--copy-ai-config` — Vorhandene Claude Code-, Codex- und Copilot CLI-Konfiguration vom Host in das neue DEVenv-Home kopieren (gilt nur für separaten Home-Modus).
 - `--no-copy-ai-config` — AI-Konfiguration nicht kopieren. Dies ist der Standard bei unbeaufsichtigt.
 - `--overwrite-existing-config` — Bestehende AI-Config-Pfade im DEVenv-Home ohne Rückfrage überschreiben. Standardmäßig fragt das Skript vor dem Überschreiben nach.
@@ -147,14 +148,14 @@ Das Bootstrap-Skript innerhalb des Containers installiert die folgenden Tools un
 - **CLI-Utilities:** curl, jq, ripgrep, fzf, unzip, ShellCheck, tmux, direnv
 - **Runtime-Versionsverwaltung:** mise (installiert über das offizielle Installationsskript zu `~/.local/bin/mise` für Konsistenz über Distributionen hinweg)
 - **Dokumentenverarbeitung:** pandoc, Graphviz, LibreOffice, LibreOffice Writer. LibreOffice läuft headless und konvertiert XLSX-, CSV- und DOCX-Dateien nach PDF. Zusätzlich werden die Schriften Carlito und Liberation installiert.
-- **PDF- und OCR-Werkzeuge:** poppler (PDF-Hilfsprogramme, Paketname variiert je nach Distribution), qpdf, Ghostscript, Tesseract OCR mit den Sprachdaten für Englisch und Deutsch (`eng`, `deu`), ocrmypdf. Auf openSUSE wird ocrmypdf nicht installiert, da das Paket dort nicht im Paketsatz enthalten ist.
-- **LaTeX-Stack für PDF-Ausgaben mit pandoc:** minimaler XeLaTeX-Stack (XeTeX sowie die LaTeX- und Schriften-Empfehlungspakete), damit pandoc PDF-Dateien erzeugen kann. Zusätzlich wird Typst als alternative PDF-Engine installiert, sofern die Distribution es paketiert (nicht auf apt-basierten Systemen).
+- **PDF- und OCR-Werkzeuge:** poppler (PDF-Hilfsprogramme, Paketname variiert je nach Distribution), qpdf, Ghostscript, Tesseract OCR mit den Sprachdaten für Englisch und Deutsch (`eng`, `deu`), ocrmypdf. Auf openSUSE und Arch Linux wird ocrmypdf nicht installiert.
+- **LaTeX-Stack für PDF-Ausgaben mit pandoc:** minimaler XeLaTeX-Stack (XeTeX sowie die LaTeX- und Schriften-Empfehlungspakete), damit pandoc PDF-Dateien erzeugen kann. Zusätzlich wird Typst als alternative PDF-Engine installiert, und zwar auf openSUSE, Arch Linux und Alpine. Auf apt-basierten Systemen und auf Fedora (dnf) wird Typst nicht installiert, also auch nicht im Standard-Image `registry.fedoraproject.org/fedora-toolbox:latest`.
 - **Headless-Ausführung für draw.io:** Xvfb (`xvfb-run`), xauth sowie die Laufzeitbibliotheken für Electron (GTK 3, NSS, GBM, ALSA) und ICU. Die Paketnamen variieren je nach Distribution.
 - **Repository-Verwaltung:** GitHub CLI (`gh`)
 - **AI-Assistenten:** Claude Code (`@anthropic-ai/claude-code`), Codex (`@openai/codex`), Copilot CLI (`@github/copilot`)
 - **Optionale Werkzeuge:** PowerShell (`pwsh`), draw.io Desktop (`drawio`) und Azure CLI (`az`). Details weiter unten.
 
-Das Skript erkennt den Package Manager des Containers (apt, dnf, zypper, pacman oder apk) und verwendet die entsprechenden Befehle für die Linux-Distribution. Falls ein Paket nicht installiert werden kann, protokolliert das Skript eine Warnung und setzt die Installation fort, wodurch der Installationsvorgang selbst dann abgeschlossen werden kann, wenn ein nicht kritisches Paket nicht verfügbar ist.
+Das Skript erkennt den Package Manager des Containers (apt, dnf, zypper, pacman oder apk) und verwendet die entsprechenden Befehle für die Linux-Distribution. Die Systempakete werden zunächst in einer einzigen Transaktion des Package Managers installiert. Schlägt diese fehl, werden die Pakete einzeln nacheinander installiert, damit Fehler je Paket gemeldet werden. Ein Paket, das nicht installiert werden kann, protokolliert das Skript mit einer Warnung und setzt die Installation fort. Am Ende listet das Skript alle fehlgeschlagenen Pakete auf, sodass der Installationsvorgang auch dann abgeschlossen werden kann, wenn ein nicht kritisches Paket nicht verfügbar ist.
 
 **Shell-Aktivierung für mise und direnv:** Sowohl `mise` als auch `direnv` erfordern Shell-Aktivierungshooks, um zu funktionieren. Nach Abschluss der Installation gibt das Bootstrap-Skript die exakte Aktivierungszeile für jedes Tool aus. Diese Zeilen müssen der Shell-Startdatei hinzugefügt werden (z.B. `~/.bashrc`, `~/.zshrc` oder die Entsprechung für die verwendete Shell); zum Beispiel:
 
@@ -167,13 +168,19 @@ Das Installationsskript modifiziert die Shell-Konfiguration nicht automatisch �
 
 **Python-Bibliotheken für die Dokumentenkonvertierung:** Die Bibliotheken `openpyxl`, `pandas`, `tabulate`, `pdfplumber`, `pymupdf`, `pypdf`, `python-docx`, `pymupdf4llm` und `markitdown` werden per pip in eine eigene Python-venv unter `~/.local/share/devenv/doc-tools` installiert, nicht in die System-Python-Installation. Grund: apt, pacman und apk kennzeichnen das System-Python als extern verwaltet (PEP 668). Skripte, die diese Bibliotheken benötigen, werden mit `~/.local/share/devenv/doc-tools/bin/python` ausgeführt. Die Einrichtung dieser venv ist ein optionaler Schritt. Schlägt sie fehl, gibt das Bootstrap-Skript eine Warnung aus und setzt die restliche Installation fort.
 
+Aufruf eines Skripts, das diese Bibliotheken benötigt:
+
+```bash
+~/.local/share/devenv/doc-tools/bin/python your-script.py
+```
+
 **Optionale Werkzeuge mit eigenem Installationsweg:** PowerShell, draw.io Desktop und Azure CLI werden nicht über den Package Manager installiert:
 
-- **PowerShell (`pwsh`):** Das aktuelle Release des Projekts PowerShell/PowerShell wird von GitHub geladen und nach `~/.local/share/devenv/powershell` entpackt. Ein Link liegt in `~/.local/bin/pwsh`. Für Alpine steht nur das x86_64-Build mit musl zur Verfügung.
-- **draw.io Desktop (`drawio`):** Das aktuelle AppImage des Projekts jgraph/drawio-desktop wird von GitHub geladen und nach `~/.local/share/devenv/drawio` entpackt, da Container in der Regel kein FUSE bereitstellen. Das Wrapper-Skript `~/.local/bin/drawio` führt die Anwendung über `xvfb-run` ohne Bildschirm und mit `--no-sandbox` aus. Ein Headless-Export ist beispielsweise mit `drawio -x -f pdf -o out.pdf in.drawio` möglich. Auf Alpine ist draw.io Desktop nicht verfügbar, da das AppImage glibc benötigt.
-- **Azure CLI (`az`):** Das Paket `azure-cli` wird per pip in eine eigene venv unter `~/.local/share/devenv/azure-cli` installiert. Ein Link liegt in `~/.local/bin/az`.
+- **PowerShell (`pwsh`):** Das aktuelle Release des Projekts PowerShell/PowerShell wird von GitHub geladen und nach `~/.local/share/devenv/powershell` entpackt. Ein Link `/usr/local/bin/pwsh` zeigt auf `~/.local/share/devenv/powershell/pwsh`. Für Alpine steht nur das x86_64-Build mit musl zur Verfügung.
+- **draw.io Desktop (`drawio`):** Das aktuelle AppImage des Projekts jgraph/drawio-desktop wird von GitHub geladen und nach `~/.local/share/devenv/drawio` entpackt, da Container in der Regel kein FUSE bereitstellen. Das Wrapper-Skript `/usr/local/bin/drawio` führt die Anwendung über `xvfb-run` ohne Bildschirm und mit `--no-sandbox` aus. Ein Headless-Export ist beispielsweise mit `drawio -x -f pdf -o out.pdf in.drawio` möglich. Auf Alpine ist draw.io Desktop nicht verfügbar, da das AppImage glibc benötigt. Fehlt `xvfb-run`, schlägt die draw.io-Installation mit einem Fehler fehl.
+- **Azure CLI (`az`):** Das Paket `azure-cli` wird per pip in eine eigene venv unter `~/.local/share/devenv/azure-cli` installiert. Ein Link `/usr/local/bin/az` zeigt auf `~/.local/share/devenv/azure-cli/bin/az`.
 
-Die Downloads von PowerShell und draw.io werden gegen den sha256-Digest geprüft, den GitHub für das jeweilige Release-Asset veröffentlicht. Fehlt der Digest oder stimmt er nicht überein, wird die Installation abgebrochen. Schlägt eine der drei Installationen fehl, gibt das Bootstrap-Skript eine Warnung aus und setzt die restliche Installation fort. Die Befehle `pwsh`, `drawio` und `az` liegen in `~/.local/bin`; dieses Verzeichnis muss im PATH der Shell enthalten sein.
+Die Downloads von PowerShell und draw.io werden gegen den sha256-Digest geprüft, den GitHub für das jeweilige Release-Asset veröffentlicht. Fehlt der Digest oder stimmt er nicht überein, wird die Installation abgebrochen. Schlägt eine der drei Installationen fehl, gibt das Bootstrap-Skript eine Warnung aus und setzt die restliche Installation fort. Die Befehle `pwsh`, `drawio` und `az` werden in `/usr/local/bin` des Containers angelegt. Dieses Verzeichnis ist im PATH innerhalb des Containers enthalten; `~/.local/bin` wird dafür nicht benötigt.
 
 ## Host-Wrapper-Befehle
 
@@ -189,7 +196,7 @@ codex list
 copilot auth login
 ```
 
-**Update-Prüfung:** Vor der Ausführung des Befehls führt jeder Wrapper `npm install -g <package>@latest` innerhalb des `DEVenv`-Containers für sein eigenes AI-CLI-Paket aus. Diese Prüfung wird bei jedem Aufruf ausgeführt. Das Update nutzt `sudo -n`, sodass der Wrapper niemals auf eine Passwortaufforderung wartet – sind keine zwischengespeicherten sudo-Anmeldedaten verfügbar, gibt er eine Warnung aus und setzt die Nutzung der aktuell installierten Version fort. Die Update-Prüfung blockiert oder beschädigt den tatsächlichen Befehl nicht, auch nicht wenn das Update selbst fehlschlägt.
+**Update-Prüfung:** Vor der Ausführung des Befehls führt jeder Wrapper `npm install -g <package>@latest` innerhalb des `DEVenv`-Containers für sein eigenes AI-CLI-Paket aus. Diese Prüfung wird bei jedem Aufruf ausgeführt. Das Update nutzt `sudo -n`, sodass der Wrapper niemals auf eine Passwortaufforderung wartet – sind keine zwischengespeicherten sudo-Anmeldedaten verfügbar, gibt er eine Warnung aus und setzt die Nutzung der aktuell installierten Version fort. Die Ausgabe des Updates und die Warnung gehen auf die Fehlerausgabe (stderr). Die Update-Prüfung liest nie von der Standardeingabe, da diese auf `/dev/null` umgeleitet ist. Die Update-Prüfung blockiert oder beschädigt den tatsächlichen Befehl nicht, auch nicht wenn das Update selbst fehlschlägt.
 
 **PATH-Konfiguration:** Damit die Wrapper von jedem Verzeichnis aus gefunden werden, muss `~/.local/bin` in der PATH-Variable der Shell enthalten sein. Das Installationsskript überprüft dies nach der Erstellung der Wrapper. Falls `~/.local/bin` nicht in PATH enthalten ist, gibt das Skript eine Erinnerung aus, die vorschlägt, es in die Shell-Startdatei hinzuzufügen. Hierzu ist folgende Zeile in `~/.bashrc`, `~/.zshrc` oder in der entsprechenden Startdatei der Shell einzufügen:
 

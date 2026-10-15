@@ -23,7 +23,8 @@ readonly MISE_INSTALL_PATH="${HOME}/.local/bin/mise"
 # text/table extraction). They live in a dedicated venv instead of the system
 # site-packages, since apt/pacman/apk mark the system Python as externally
 # managed (PEP 668) and distro package names for these differ too much.
-readonly DOC_TOOLS_VENV="${HOME}/.local/share/devenv/doc-tools"
+readonly DEVENV_DATA_DIR="${HOME}/.local/share/devenv"
+readonly DOC_TOOLS_VENV="${DEVENV_DATA_DIR}/doc-tools"
 readonly DOC_TOOLS_PIP_PACKAGES=(
   openpyxl
   pandas
@@ -41,14 +42,15 @@ readonly DOC_TOOLS_PIP_PACKAGES=(
 # for every release asset); Azure CLI comes from PyPI into its own venv.
 readonly POWERSHELL_RELEASES_API="https://api.github.com/repos/PowerShell/PowerShell/releases/latest"
 readonly DRAWIO_RELEASES_API="https://api.github.com/repos/jgraph/drawio-desktop/releases/latest"
-readonly LOCAL_BIN_DIR="${HOME}/.local/bin"
-readonly POWERSHELL_INSTALL_DIR="${HOME}/.local/share/devenv/powershell"
-readonly DRAWIO_INSTALL_DIR="${HOME}/.local/share/devenv/drawio"
-readonly AZURE_CLI_VENV="${HOME}/.local/share/devenv/azure-cli"
+readonly CONTAINER_BIN_DIR="/usr/local/bin"
+readonly POWERSHELL_INSTALL_DIR="${DEVENV_DATA_DIR}/powershell"
+readonly DRAWIO_INSTALL_DIR="${DEVENV_DATA_DIR}/drawio"
+readonly AZURE_CLI_VENV="${DEVENV_DATA_DIR}/azure-cli"
 
 OPT_SKIP_AI_CLIS=0
 OPT_PKG_MANAGER=""
 OPT_DRY_RUN=0
+STAGING_DIR=""
 
 run_or_plan() {
   if (( OPT_DRY_RUN )); then
@@ -151,20 +153,21 @@ refresh_index() {
   local mgr="$1"
   case "${mgr}" in
     apt) run_or_plan sudo apt-get update -y ;;
-    pacman) run_or_plan sudo pacman -Sy --noconfirm ;;
+    pacman) run_or_plan sudo pacman -Syu --noconfirm ;;
     apk) run_or_plan sudo apk update ;;
     dnf|zypper) ;;
   esac
 }
 
 install_pkg() {
-  local mgr="$1" pkg="$2"
+  local mgr="$1"
+  shift
   case "${mgr}" in
-    apt) run_or_plan sudo apt-get install -y "${pkg}" ;;
-    dnf) run_or_plan sudo dnf install -y "${pkg}" ;;
-    zypper) run_or_plan sudo zypper --non-interactive install "${pkg}" ;;
-    pacman) run_or_plan sudo pacman -S --noconfirm "${pkg}" ;;
-    apk) run_or_plan sudo apk add "${pkg}" ;;
+    apt) run_or_plan sudo apt-get install -y "$@" ;;
+    dnf) run_or_plan sudo dnf install -y "$@" ;;
+    zypper) run_or_plan sudo zypper --non-interactive install "$@" ;;
+    pacman) run_or_plan sudo pacman -S --needed --noconfirm "$@" ;;
+    apk) run_or_plan sudo apk add "$@" ;;
   esac
 }
 
@@ -185,14 +188,14 @@ packages_for() {
         gcc gcc-c++ make curl jq ripgrep fzf tmux direnv ShellCheck pandoc libreoffice libreoffice-writer \
         graphviz gh openssh-clients gnupg2 unzip \
         poppler-utils qpdf ghostscript tesseract tesseract-langpack-eng tesseract-langpack-deu ocrmypdf \
-        texlive-xetex texlive-collection-latexrecommended texlive-collection-fontsrecommended typst \
+        texlive-xetex texlive-collection-latexrecommended texlive-collection-fontsrecommended \
         google-carlito-fonts liberation-fonts \
         xorg-x11-server-Xvfb xorg-x11-xauth gtk3 nss mesa-libgbm alsa-lib libicu
       ;;
     zypper)
       printf '%s\n' git git-lfs nodejs npm python3 python3-pip python3-devel \
         gcc gcc-c++ make curl jq ripgrep fzf tmux direnv ShellCheck pandoc libreoffice libreoffice-writer \
-        graphviz gh openssh-clients gnupg2 unzip \
+        graphviz gh openssh-clients gpg2 unzip \
         poppler-tools qpdf ghostscript tesseract-ocr tesseract-ocr-traineddata-english \
         tesseract-ocr-traineddata-german texlive-xetex texlive-collection-latexrecommended \
         texlive-collection-fontsrecommended typst \
@@ -203,8 +206,8 @@ packages_for() {
       printf '%s\n' git git-lfs nodejs npm python python-pip \
         base-devel curl jq ripgrep fzf tmux direnv shellcheck pandoc libreoffice-fresh graphviz github-cli \
         openssh gnupg unzip poppler qpdf ghostscript tesseract tesseract-data-eng tesseract-data-deu \
-        ocrmypdf texlive-xetex texlive-latexrecommended texlive-fontsrecommended typst ttf-carlito ttf-liberation \
-        xorg-server-xvfb xorg-xauth gtk3 nss libgbm alsa-lib icu
+        texlive-xetex texlive-latexrecommended texlive-fontsrecommended typst ttf-carlito ttf-liberation \
+        xorg-server-xvfb xorg-xauth gtk3 nss mesa alsa-lib icu
       ;;
     apk)
       printf '%s\n' git git-lfs nodejs npm python3 py3-pip python3-dev \
@@ -232,7 +235,7 @@ install_mise() {
   # it cannot fire on later returns, where the local is gone (unbound under set -u).
   trap 'rm -f -- "${mise_installer}"; trap - RETURN' RETURN
 
-  if ! curl -fsSL "${MISE_INSTALL_URL}" -o "${mise_installer}"; then
+  if ! curl -fsSL --proto '=https' "${MISE_INSTALL_URL}" -o "${mise_installer}"; then
     printf 'Warning: could not download the mise installer from %s.\n' "${MISE_INSTALL_URL}" >&2
     return 1
   fi
@@ -253,7 +256,7 @@ install_doc_tools() {
     return 1
   fi
 
-  mkdir -p -- "$(dirname -- "${DOC_TOOLS_VENV}")"
+  mkdir -p -- "${DEVENV_DATA_DIR}" || return 1
   if ! python3 -m venv "${DOC_TOOLS_VENV}"; then
     return 1
   fi
@@ -265,9 +268,16 @@ install_doc_tools() {
 # sha256 digest. Refuses to continue if the digest is missing or does not match.
 download_github_asset() {
   local api_url="$1" name_regex="$2" dest="$3"
-  local release_json asset_url asset_digest actual_digest
+  local release_json asset_url asset_digest actual_digest tool
 
-  if ! release_json="$(curl -fsSL "${api_url}")"; then
+  for tool in curl jq sha256sum; do
+    if ! command -v "${tool}" >/dev/null 2>&1; then
+      printf 'Error: %s not found inside the container; cannot download from GitHub releases.\n' "${tool}" >&2
+      return 1
+    fi
+  done
+
+  if ! release_json="$(curl -fsSL --proto '=https' "${api_url}")"; then
     printf 'Warning: could not query %s.\n' "${api_url}" >&2
     return 1
   fi
@@ -279,26 +289,43 @@ download_github_asset() {
     return 1
   fi
 
-  if ! curl -fsSL "${asset_url}" -o "${dest}"; then
+  if ! curl -fsSL --proto '=https' "${asset_url}" -o "${dest}"; then
     printf 'Warning: could not download %s.\n' "${asset_url}" >&2
     return 1
   fi
 
-  actual_digest="sha256:$(sha256sum -- "${dest}" | cut -d' ' -f1)"
+  if ! actual_digest="$(sha256sum < "${dest}")"; then
+    printf 'Error: could not compute the sha256 digest of %s.\n' "${dest}" >&2
+    return 1
+  fi
+  actual_digest="sha256:${actual_digest%% *}"
   if [[ "${actual_digest}" != "${asset_digest}" ]]; then
     printf 'Error: checksum mismatch for %s (expected %s, got %s).\n' "${asset_url}" "${asset_digest}" "${actual_digest}" >&2
     return 1
   fi
 }
 
+new_staging_dir() {
+  mkdir -p -- "${DEVENV_DATA_DIR}" || return 1
+  STAGING_DIR="$(mktemp -d -- "${DEVENV_DATA_DIR}/.staging.XXXXXX")" || return 1
+}
+
+remove_staging_dir() {
+  [[ -z "${STAGING_DIR}" ]] || rm -rf -- "${STAGING_DIR}"
+  STAGING_DIR=""
+}
+
+replace_dir() {
+  local staged="$1" target="$2"
+  if [[ -e "${target}" || -L "${target}" ]]; then
+    mv -- "${target}" "${STAGING_DIR}/previous" || return 1
+  fi
+  mv -- "${staged}" "${target}"
+}
+
 # Replaces any previous install by extracting into a fresh directory first.
 install_powershell() {
   local mgr="$1"
-  if (( OPT_DRY_RUN )); then
-    printf '[dry-run] would download the latest PowerShell release from GitHub into %s\n' "${POWERSHELL_INSTALL_DIR}"
-    return 0
-  fi
-
   local arch libc_suffix=""
   case "$(uname -m)" in
     x86_64) arch="x64" ;;
@@ -313,36 +340,29 @@ install_powershell() {
     libc_suffix="musl-"
   fi
 
-  local workdir
-  workdir="$(mktemp -d)"
-  trap 'rm -rf -- "${workdir}"; trap - RETURN' RETURN
+  if (( OPT_DRY_RUN )); then
+    printf '[dry-run] would download the latest PowerShell release from GitHub into %s and link %s/pwsh to it\n' "${POWERSHELL_INSTALL_DIR}" "${CONTAINER_BIN_DIR}"
+    return 0
+  fi
 
-  download_github_asset "${POWERSHELL_RELEASES_API}" "^powershell-[0-9.]+-linux-${libc_suffix}${arch}\\.tar\\.gz$" "${workdir}/powershell.tar.gz" || return 1
+  new_staging_dir || return 1
+  trap 'remove_staging_dir; trap - RETURN' RETURN
 
-  mkdir -p -- "${workdir}/extracted" "${LOCAL_BIN_DIR}"
-  tar -xzf "${workdir}/powershell.tar.gz" -C "${workdir}/extracted" || return 1
-  chmod +x "${workdir}/extracted/pwsh" || return 1
-  rm -rf -- "${POWERSHELL_INSTALL_DIR}"
-  mkdir -p -- "$(dirname -- "${POWERSHELL_INSTALL_DIR}")"
-  mv -- "${workdir}/extracted" "${POWERSHELL_INSTALL_DIR}" || return 1
-  ln -sfn "${POWERSHELL_INSTALL_DIR}/pwsh" "${LOCAL_BIN_DIR}/pwsh"
+  download_github_asset "${POWERSHELL_RELEASES_API}" "^powershell-[0-9.]+-linux-${libc_suffix}${arch}\\.tar\\.gz$" "${STAGING_DIR}/powershell.tar.gz" || return 1
+
+  mkdir -- "${STAGING_DIR}/extracted" || return 1
+  tar -xzf "${STAGING_DIR}/powershell.tar.gz" -C "${STAGING_DIR}/extracted" || return 1
+  chmod +x -- "${STAGING_DIR}/extracted/pwsh" || return 1
+  replace_dir "${STAGING_DIR}/extracted" "${POWERSHELL_INSTALL_DIR}" || return 1
+  sudo ln -sfn -- "${POWERSHELL_INSTALL_DIR}/pwsh" "${CONTAINER_BIN_DIR}/pwsh"
 }
 
 # The AppImage is extracted instead of run, since containers usually lack FUSE.
 # The wrapper runs it under xvfb so the CLI export (drawio -x ...) works headless.
 install_drawio() {
   local mgr="$1"
-  if (( OPT_DRY_RUN )); then
-    printf '[dry-run] would download the latest draw.io desktop AppImage from GitHub into %s\n' "${DRAWIO_INSTALL_DIR}"
-    return 0
-  fi
-
   if [[ "${mgr}" == "apk" ]]; then
     printf 'Error: the draw.io desktop AppImage needs glibc, which Alpine does not provide.\n' >&2
-    return 1
-  fi
-  if ! command -v xvfb-run >/dev/null 2>&1; then
-    printf 'Error: xvfb-run not found; draw.io desktop cannot run headless without it.\n' >&2
     return 1
   fi
 
@@ -353,29 +373,34 @@ install_drawio() {
     *) printf 'Error: unsupported CPU architecture %s for draw.io desktop.\n' "$(uname -m)" >&2; return 1 ;;
   esac
 
-  local workdir
-  workdir="$(mktemp -d)"
-  trap 'rm -rf -- "${workdir}"; trap - RETURN' RETURN
+  if (( OPT_DRY_RUN )); then
+    printf '[dry-run] would download the latest draw.io desktop AppImage from GitHub into %s and write the %s/drawio wrapper\n' "${DRAWIO_INSTALL_DIR}" "${CONTAINER_BIN_DIR}"
+    return 0
+  fi
 
-  download_github_asset "${DRAWIO_RELEASES_API}" "^drawio-${arch}-[0-9.]+\\.AppImage$" "${workdir}/drawio.AppImage" || return 1
-  chmod +x "${workdir}/drawio.AppImage" || return 1
-  (cd "${workdir}" && ./drawio.AppImage --appimage-extract >/dev/null) || return 1
+  if ! command -v xvfb-run >/dev/null 2>&1; then
+    printf 'Error: xvfb-run not found; draw.io desktop cannot run headless without it.\n' >&2
+    return 1
+  fi
 
-  mkdir -p -- "${LOCAL_BIN_DIR}"
-  rm -rf -- "${DRAWIO_INSTALL_DIR}"
-  mkdir -p -- "$(dirname -- "${DRAWIO_INSTALL_DIR}")"
-  mv -- "${workdir}/squashfs-root" "${DRAWIO_INSTALL_DIR}" || return 1
+  new_staging_dir || return 1
+  trap 'remove_staging_dir; trap - RETURN' RETURN
+
+  download_github_asset "${DRAWIO_RELEASES_API}" "^drawio-${arch}-[0-9.]+\\.AppImage$" "${STAGING_DIR}/drawio.AppImage" || return 1
+  chmod +x -- "${STAGING_DIR}/drawio.AppImage" || return 1
+  (cd -- "${STAGING_DIR}" && ./drawio.AppImage --appimage-extract >/dev/null) || return 1
+  replace_dir "${STAGING_DIR}/squashfs-root" "${DRAWIO_INSTALL_DIR}" || return 1
 
   {
     printf '#!/usr/bin/env bash\n'
     printf 'exec xvfb-run -a %q --no-sandbox "$@"\n' "${DRAWIO_INSTALL_DIR}/AppRun"
-  } > "${LOCAL_BIN_DIR}/drawio"
-  chmod +x "${LOCAL_BIN_DIR}/drawio"
+  } > "${STAGING_DIR}/drawio" || return 1
+  sudo install -m 0755 -- "${STAGING_DIR}/drawio" "${CONTAINER_BIN_DIR}/drawio"
 }
 
 install_azure_cli() {
   if (( OPT_DRY_RUN )); then
-    printf '[dry-run] would create venv %s and pip install azure-cli\n' "${AZURE_CLI_VENV}"
+    printf '[dry-run] would create venv %s, pip install azure-cli and link %s/az to it\n' "${AZURE_CLI_VENV}" "${CONTAINER_BIN_DIR}"
     return 0
   fi
 
@@ -384,17 +409,13 @@ install_azure_cli() {
     return 1
   fi
 
-  mkdir -p -- "$(dirname -- "${AZURE_CLI_VENV}")" "${LOCAL_BIN_DIR}"
+  mkdir -p -- "${DEVENV_DATA_DIR}" || return 1
   python3 -m venv "${AZURE_CLI_VENV}" || return 1
   "${AZURE_CLI_VENV}/bin/python" -m pip install --upgrade azure-cli || return 1
-  ln -sfn "${AZURE_CLI_VENV}/bin/az" "${LOCAL_BIN_DIR}/az"
+  sudo ln -sfn -- "${AZURE_CLI_VENV}/bin/az" "${CONTAINER_BIN_DIR}/az"
 }
 
 print_activation_notes() {
-  if [[ -x "${LOCAL_BIN_DIR}/pwsh" || -x "${LOCAL_BIN_DIR}/drawio" || -x "${LOCAL_BIN_DIR}/az" ]]; then
-    printf '\nNote: pwsh, drawio (headless draw.io export, e.g. drawio -x -f pdf -o out.pdf in.drawio) and az are in %s; make sure it is on PATH.\n' "${LOCAL_BIN_DIR}" >&2
-  fi
-
   if [[ -x "${DOC_TOOLS_VENV}/bin/python" ]]; then
     printf '\nNote: Python document-conversion libraries (openpyxl, pandas, pdfplumber, pymupdf, ...) are in %s.\n' "${DOC_TOOLS_VENV}" >&2
     printf 'Use %s/bin/python to run scripts that need them.\n' "${DOC_TOOLS_VENV}" >&2
@@ -416,6 +437,7 @@ print_activation_notes() {
 
 main() {
   parse_args "$@"
+  trap remove_staging_dir EXIT
 
   if ! command -v sudo >/dev/null 2>&1; then
     printf 'Error: sudo not found inside the container; cannot install packages.\n' >&2
@@ -444,16 +466,20 @@ main() {
 
   refresh_index "${pkg_manager}"
 
-  local -a failed_packages=()
+  local -a packages=() failed_packages=()
   local pkg
-  while IFS= read -r pkg; do
-    [[ -z "${pkg}" ]] && continue
-    printf 'Installing %s...\n' "${pkg}"
-    if ! install_pkg "${pkg_manager}" "${pkg}"; then
-      failed_packages+=("${pkg}")
-      printf 'Warning: failed to install %s, continuing.\n' "${pkg}" >&2
-    fi
-  done < <(packages_for "${pkg_manager}")
+  mapfile -t packages < <(packages_for "${pkg_manager}")
+  printf 'Installing %d system packages in one transaction...\n' "${#packages[@]}"
+  if ! install_pkg "${pkg_manager}" "${packages[@]}"; then
+    printf 'Warning: the combined package install failed; retrying one package at a time.\n' >&2
+    for pkg in "${packages[@]}"; do
+      printf 'Installing %s...\n' "${pkg}"
+      if ! install_pkg "${pkg_manager}" "${pkg}"; then
+        failed_packages+=("${pkg}")
+        printf 'Warning: failed to install %s, continuing.\n' "${pkg}" >&2
+      fi
+    done
+  fi
 
   local -a failed_optional_tools=()
   printf 'Installing mise...\n'
@@ -480,12 +506,10 @@ main() {
   local -a failed_ai_clis=()
   if (( OPT_SKIP_AI_CLIS )); then
     printf 'Skipping AI CLI installation (--skip-ai-clis).\n'
+  elif (( ! OPT_DRY_RUN )) && ! command -v npm >/dev/null 2>&1; then
+    printf 'Error: npm is not available after package installation; cannot install the AI CLIs.\n' >&2
+    failed_ai_clis=("${AI_CLI_NPM_PACKAGES[@]}")
   else
-    if (( ! OPT_DRY_RUN )) && ! command -v npm >/dev/null 2>&1; then
-      printf 'Error: npm is not available after package installation; cannot install the AI CLIs.\n' >&2
-      exit 1
-    fi
-
     for pkg in "${AI_CLI_NPM_PACKAGES[@]}"; do
       printf 'Installing %s via npm...\n' "${pkg}"
       if ! run_or_plan sudo npm install -g "${pkg}"; then
@@ -498,12 +522,12 @@ main() {
   if (( ${#failed_packages[@]} > 0 )); then
     printf 'The following system packages could not be installed: %s\n' "${failed_packages[*]}" >&2
   fi
+  if (( ${#failed_optional_tools[@]} > 0 )); then
+    printf 'The following optional tools could not be installed: %s\n' "${failed_optional_tools[*]}" >&2
+  fi
   if (( ${#failed_ai_clis[@]} > 0 )); then
     printf 'The following AI CLIs could not be installed: %s\n' "${failed_ai_clis[*]}" >&2
     exit 1
-  fi
-  if (( ${#failed_optional_tools[@]} > 0 )); then
-    printf 'The following optional tools could not be installed: %s\n' "${failed_optional_tools[*]}" >&2
   fi
 
   if (( OPT_DRY_RUN )); then
